@@ -107,6 +107,25 @@ A 的全部功能 + 内核/执行器分层 + 四类规则统一配置对象（�
 
 > 注：CEO-6A 与 CEO-14A 的关系：双模式设计保留（记录在案），但 M1 只实现 await 模式，verdict 模式在 M4 落地时启用。
 
+### 设计评审决策（/plan-design-review 2026-09-18，7 pass）
+
+| # | 决策 | 内容 |
+|---|---|---|
+| DS-1A | 设备列表卡片网格 | 每设备一张卡片，第一眼扫「设备名+串口状态灯+会话忙闲徽章」，操作按钮（开会话/SSH Test）次之，SSH 详情/备注折叠；卡片即操作对象（点卡片=进设备上下文） |
+| DS-1B | 终端吃满布局 | 终端区占视口剩余全部高度（flex），顶栏+状态条固定高度；expect 进度条贴终端顶部，确认弹窗居中 |
+| DS-1C | expect 垂直卡片列表 | 每步骤一张卡片（步骤号+要素行内排列），上移/下移排序，步骤间插入，复制按钮 |
+| DS-1D | 左侧栏导航 | Soybean 默认左侧栏，M1 四项：设备/会话历史/expect 编辑/系统设置 |
+| DS-2A | 忙态弹窗完整信息 | 占用者用户名+会话类型+已持续时长+（任务会话）expect 进度 |
+| DS-2B | 断线遮罩保留内容 | 半透明遮罩（断开/重连中第 N 次）+ 已收数据保留可见，重连后无缝续接 |
+| DS-3A | 三时刻视觉规格 | 状态灯变绿+一次性 pulse（仅「在线且空闲」态，防 pulsing-dot 滥用）；expect 运行进度条（当前步/总步+步骤名）；完成徽章+会话时长+绿色终态 |
+| DS-4A | 暗色默认主题 | 工程工具惯例，终端页融入；亮色可切换；强调色用工程冷色替换 Soybean 默认蓝 |
+| DS-5A | M1 最小 token 集 | 强调色 teal（#18a058 系）+ 语义色用 Naive UI 默认 + 终端字体 JetBrains Mono（中文 fallback 系统黑体，web 端不自托管）+ 圆角/间距沿用 Naive UI 默认；完整 DESIGN.md 留 /design-consultation |
+| DS-6A | 最小响应式 | 卡片网格折列（4→2→1）+ 确认弹窗窄屏适配 + 终端自适应；不做手机专属交互，保证站机架前手机能看能点 |
+| DS-6B | 无障碍最低线 | 状态灯旁文字标签（在线/离线，色盲友好）+ 表单键盘 tab 顺序 + Naive UI 默认对比度 |
+| DS-7A | expect 一次渲染+定位 | 长序列不分组不折叠，页顶步骤总数+点击步骤号快速定位 |
+| DS-7B | 运行中止+二次确认 | expect 进度条旁红色「中止」按钮，二次确认（提示设备可能半刷，对齐需求 3.6）；中止=停后续步骤+会话 FAILED+日志标注 |
+| DS-7C | 历史入口卡片图标+抽屉 | 设备卡片「历史」图标 → 抽屉展示该设备会话历史（状态/起止/时长/日志查看） |
+
 
 
 ```
@@ -232,8 +251,8 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Surfaced by: 设计文档 M1 交付物 + 3A 传输认证
   - Files: `serial-client/`
   - Verify: 集成测试（对 server 起的 WS 服务）+ 真机手动验收
-- [ ] **T5 (P2, human: ~2.5d / CC: ~3.5h)** — server + web — Web 终端与 expect 编辑：xterm.js 终端（跨用户忙拒绝+第二查看者只读跟随 CEO-15A；浏览器刷新重连回自己活跃会话 CEO-17A）+ 手动 step 占位对象 + PASS/FAIL 确认页 + expect 序列最小编辑 UI（决策 16A）+ expect 运行入口（终端页运行按钮创建任务会话，运行期间禁止人工键入 CEO-17A）+ 三个空状态（CEO-5A）+ 客户端版本匹配下载页（CEO-17A）
-  - Surfaced by: Test review 用户流程 + CEO-5A/15A/17A + 外部声音 #9（分发链路）
+- [ ] **T5 (P2, human: ~3d / CC: ~4h)** — server + web — Web 终端与 expect 编辑：xterm.js 终端（跨用户忙拒绝+第二查看者只读跟随 CEO-15A；浏览器刷新重连回自己活跃会话 CEO-17A；断线遮罩保留内容 DS-2B）+ 手动 step 占位对象 + PASS/FAIL 确认页 + expect 序列编辑 UI（决策 16A，垂直卡片列表 DS-1C + 一次渲染定位 DS-7A）+ expect 运行入口（终端页运行按钮创建任务会话，运行期间禁止人工键入 CEO-17A；进度条+中止二次确认 DS-3A/DS-7B）+ 三个空状态（CEO-5A）+ 客户端版本匹配下载页（CEO-17A）+ **设计规格落地（DS-1A/1B/1D 卡片网格+终端吃满+左侧栏；DS-2A 忙态弹窗；DS-3A 三时刻视觉；DS-4A/5A 暗色默认+teal token；DS-6A/6B 最小响应式+无障碍；DS-7C 历史抽屉）**
+  - Surfaced by: Test review 用户流程 + CEO-5A/15A/17A + 设计评审 DS-1A~DS-7C
   - Files: `server/internal/api/`, `web/src/views/session/`
   - Verify: 集成测试 + 手动验收
 - [ ] **T6 (P2, human: ~2-3d / CC: ~1h)** — 全部 — M1 验收：真实 VBS 翻译成 expect 规则（经编辑 UI 录入）全链路实测（真机 uboot 时序验证）；估时 2-3 天（真机调试反馈环无法压缩，外部声音 #11）
@@ -264,11 +283,11 @@ Synthesized from this review's findings. Each task derives from a specific findi
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | clean | HOLD SCOPE：11 节评审 11 发现闭环（CEO-1A~11A），外部声音 12 项发现处置（CEO-12A~18A，7 采纳 1 部分采纳 4 拒绝），任务 T0-T10 共 11 项 |
 | Outside Review | claude subagent（/plan-ceo-review 内建） | Independent 2nd opinion | 1 | completed | 12 项发现：延迟 spike 前置、引擎规格漂移（延时+控制字符）、verdict 移 M4、幂等键边界、双阈值分离、T7 提序、分发链路缺失、expect 入口、浏览器断连、虚拟 demo、T6 估时、Soybean 成本备注；处置见 CEO-12A~18A |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | clean | 10 决策闭环（1A-10A），1 个关键缺口（磁盘满静默失败）已立 T2；外部声音后扩至 17 决策、9 任务 |
-| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | 未运行（实现后用 /design-review 补） |
+| Design Review | `/plan-design-review` | UI/UX gaps | 1 | clean | 4/10 → 9/10：14 项设计决策（DS-1A~DS-7C）闭环——卡片网格、终端吃满、垂直卡片编辑器、暗色+teal token、三时刻视觉、最小响应式、无障碍最低线；mockup 生成不可用（无 OpenAI key），文字决策+ASCII 线框替代 |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | 未运行 |
 
-- **OUTSIDE COVERAGE:** provider=claude subagent（Codex 未安装），phase=plan-review（CEO 轮），outside_status=completed，12 项发现全部呈现给用户并逐项决策
-- **CROSS-MODEL:** 原生 HOLD SCOPE 评审与外部声音在架构决策上一致（18A 决策未挑战）；外部声音聚焦时序假设（延迟 spike 前置）、规格漂移（延时要素）、语义边界（幂等键/双阈值）——用户全盘采纳其两个动工前修订 + demo 模式 + 四项实现修正
-- **VERDICT:** CEO + ENG CLEARED — ready to implement
+- **OUTSIDE COVERAGE:** plan-review 阶段 provider=claude subagent（Codex 未安装）completed；design 阶段外部设计声音为 claude subagent completed（发现已并入 DS 决策）
+- **CROSS-MODEL:** 原生 HOLD SCOPE 评审与外部声音在架构决策上一致（18A 决策未挑战）；设计评审外部声音的发现已整合进 DS-1A~DS-7C
+- **VERDICT:** CEO + ENG + DESIGN CLEARED — ready to implement
 
 NO UNRESOLVED DECISIONS
