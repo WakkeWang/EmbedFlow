@@ -80,7 +80,7 @@ A 的全部功能 + 内核/执行器分层 + 四类规则统一配置对象（�
 | 15A | 排期修正 | M1 估时从 3 周修正为 4-6 周（含业余时间折算：业余投入约 2-3 个月日历时间）；M2-M5 逐个里程碑开工前重估，不预先承诺日期 |
 | 16A | M1 验收编辑路径 | M1 增加 expect 序列的最小编辑 UI（Web 表单编辑步骤序列，替代手写 JSON 灌库），验收走产品形态 |
 | 17A | 凭据与公开脱敏 | 会话日志密码脱敏选项列 M3 实现（M1 记 TODO）；仓库公开前对 docs/ 做一次脱敏 pass（内网 IP、真实路径、产品线名），公开前执行 |
-| 18A | 前端技术栈 | Vue3 + Vite + TS + **Naive UI**（暗色内置、tree-shake）+ **Soybean-Admin 精简起步**（i18n/权限路由/主题现成，拿到手先删演示页和 mock 层）+ Pinia + vue-i18n 9 + 原生 WebSocket 自封装（按记录 ID 订阅 + 重连退避，与决策 4A 服务端协议对齐）+ @xterm/xterm（会话终端）+ virtua 虚拟滚动（日志渲染）+ ofetch（HTTP，不用模板 mock 层） |
+| 18A | 前端技术栈 | Vue3 + Vite + TS + **Naive UI**（暗色内置、tree-shake）+ **Vite 裸搭起步（用户决策 2026-09-18：不用 Soybean-Admin 模板——模板体量大、演示页与抽象层清理成本高于收益；i18n 用最小自建结构，引入模板的决策随之作废）** + Pinia + vue-i18n 9 + 原生 WebSocket 自封装（按记录 ID 订阅 + 重连退避，与决策 4A 服务端协议对齐）+ @xterm/xterm（会话终端）+ virtua 虚拟滚动（日志渲染）+ ofetch（HTTP，不用模板 mock 层） |
 
 ### CEO 评审决策（/plan-ceo-review 2026-09-18，HOLD SCOPE）
 
