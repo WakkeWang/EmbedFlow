@@ -44,6 +44,7 @@ const showConfirmDialog = ref(false)
 let term: Terminal | null = null
 let fit: FitAddon | null = null
 let ws: WSClient | null = null
+let everOpened = false
 
 function mountTerminal() {
 	if (!termEl.value) return
@@ -88,6 +89,14 @@ onMounted(async () => {
 					if (st.owner_is_you && st.session_id) {
 						sessionID.value = st.session_id
 					}
+				} else if (st.state === 'conn_warning') {
+					// Serial-client connection lost; task session survives the
+					// grace window (CEO-16A). Show the countdown detail.
+					term?.write(`\r\n[serial link down, reconnect window: ${st.detail ?? ''}]\r\n`)
+				} else if (st.state === 'conn_down') {
+					term?.write(`\r\n[serial link down: ${st.detail ?? ''}]\r\n`)
+				} else if (st.state === 'conn_recovered') {
+					term?.write(`\r\n[serial link recovered]\r\n`)
 				} else if (st.state === 'closed' || st.state === 'failed') {
 					term?.write(`\r\n[session ${st.state}: ${st.detail ?? ''}]\r\n`)
 				}
@@ -118,8 +127,19 @@ onMounted(async () => {
 			}
 		},
 		onState: (s, a) => {
+			const prev = connState.value
 			connState.value = s
 			attempt.value = a
+			// CEO-17A: after a reconnect (closed -> connecting -> open), re-open
+			// the session so a network blip drops us back into our own session
+			// instead of a dead socket. The initial mount sends open via the
+			// interval below; this covers every later reconnect.
+			if (prev !== 'open' && s === 'open' && everOpened) {
+				tryOpen()
+			}
+			if (s === 'open') {
+				everOpened = true
+			}
 		},
 		onAuthFail: (reason) => {
 			term?.write(`\r\n[auth failed: ${reason}]\r\n`)
@@ -141,6 +161,24 @@ onMounted(async () => {
 			tryOpen()
 		}
 	}, 200)
+
+	// Restore confirmation cards after a page refresh (they persist in the
+	// store; without this, pending cards vanish until someone re-resolves).
+	// session id arrives async on the active frame; retry until known.
+	const loadCards = setInterval(async () => {
+		if (!sessionID.value) return
+		clearInterval(loadCards)
+		try {
+			const list = await sessionApi.confirmations(sessionID.value)
+			for (const c of list as { id: number; prompt: string; state: string; result?: string; note?: string }[]) {
+				if (!confirmCards.value.find((x) => x.id === c.id)) {
+					confirmCards.value.push(c)
+				}
+			}
+		} catch {
+			// Non-fatal: the server may not have any cards.
+		}
+	}, 300)
 
 	// Rule list for the run entry.
 	try {
@@ -270,6 +308,11 @@ function resolveCard(card: ConfirmCard, result: 'pass' | 'fail') {
 						{{ t('expect.failedAt', { n: progress.cur }) }}
 					</NTag>
 				</template>
+				<template v-else-if="progress && progress.phase === 'aborted'">
+					<NTag size="small" type="warning">
+						{{ t('expect.aborted', { n: progress.cur }) }}
+					</NTag>
+				</template>
 				<template v-else-if="progress && progress.phase === 'completed'">
 					<NTag size="small" type="success">{{ t('expect.completed') }}</NTag>
 				</template>
@@ -286,7 +329,7 @@ function resolveCard(card: ConfirmCard, result: 'pass' | 'fail') {
 				<NButton size="small" type="primary" :disabled="!selectedRule" @click="runRule">
 					{{ t('expect.run') }}
 				</NButton>
-				<NButton size="small" @click="showConfirmDialog = true">+ {{ t('nav.expect') === 'expect rules' ? 'Confirm' : '确认卡' }}</NButton>
+				<NButton size="small" @click="showConfirmDialog = true">+ {{ t('terminal.newConfirmCard') }}</NButton>
 				<NButton size="small" @click="closeSession">{{ t('terminal.closeSession') }}</NButton>
 			</NSpace>
 		</div>
@@ -305,7 +348,7 @@ function resolveCard(card: ConfirmCard, result: 'pass' | 'fail') {
 			</div>
 		</div>
 
-		<NModal :show="showConfirmDialog" preset="dialog" :title="t('nav.expect') === 'expect rules' ? 'New confirmation card' : '新建确认卡'" :show-icon="false">
+		<NModal :show="showConfirmDialog" preset="dialog" :title="t('terminal.newConfirmCard')" :show-icon="false">
 			<NInput v-model:value="confirmPrompt" placeholder="e.g. LED on? / LED 是否亮" @keyup.enter="insertConfirm" />
 			<template #action>
 				<NButton @click="showConfirmDialog = false">{{ t('common.cancel') }}</NButton>

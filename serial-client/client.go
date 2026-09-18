@@ -38,9 +38,24 @@ type Client struct {
 	port      string
 	localPort PortOpener
 
+	// rxBytes/txBytes count the passthrough byte volume both ways
+	// (requirement 3.4 status display; the GUI reads them, the CLI leaves
+	// them to debug endpoints).
+	rxBytes uint64
+	txBytes uint64
+
 	stop      chan struct{}
 	closeOnce sync.Once
 	done      sync.WaitGroup
+}
+
+// Counters returns the passthrough byte totals (RX from device, TX to
+// device) since Connect -- the status display's data source (requirement
+// 3.4: 收发计数).
+func (c *Client) Counters() (rx, tx uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.rxBytes, c.txBytes
 }
 
 // New creates a client pointed at a server (e.g. http://<server>:8420).
@@ -134,6 +149,9 @@ func (c *Client) connectOnce() error {
 	}
 	if f.Type != protocol.FrameAuthOK {
 		return fmt.Errorf("client: auth refused: %s", f.Body)
+	}
+	if okf, ok := f.Body.(*protocol.AuthOKFrame); ok && okf.ServerVersion != "" {
+		slog.Info("server version", "version", okf.ServerVersion)
 	}
 
 	c.done.Add(1)
@@ -247,10 +265,11 @@ func (c *Client) portToServer(p PortOpener) {
 		}
 		n, err := p.Read(buf)
 		if n > 0 {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			c.mu.Lock()
+			c.txBytes += uint64(n)
 			conn := c.conn
 			c.mu.Unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if conn != nil {
 				_ = conn.Write(ctx, websocket.MessageBinary, buf[:n])
 			}
@@ -292,6 +311,9 @@ func (c *Client) readLoop() {
 		}
 		switch typ {
 		case websocket.MessageBinary:
+			c.mu.Lock()
+			c.rxBytes += uint64(len(data))
+			c.mu.Unlock()
 			if p := portRef(); p != nil {
 				if _, err := p.Write(data); err != nil {
 					slog.Error("port write failed", "err", err)

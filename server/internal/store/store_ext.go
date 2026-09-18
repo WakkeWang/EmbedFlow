@@ -162,6 +162,14 @@ func (s *Store) ListExpectRules(ctx context.Context) ([]ExpectRule, error) {
 	return out, rows.Err()
 }
 
+// DeleteExpectRule removes a rule (the editor's delete button).
+func (s *Store) DeleteExpectRule(ctx context.Context, id int64) error {
+	return s.enqueue(ctx, func() error {
+		_, err := s.db.ExecContext(ctx, "DELETE FROM expect_rules WHERE id = ?", id)
+		return err
+	})
+}
+
 // InsertConfirmation adds a pending confirmation card to a session.
 func (s *Store) InsertConfirmation(ctx context.Context, sessionID int64, prompt string) (int64, error) {
 	var id int64

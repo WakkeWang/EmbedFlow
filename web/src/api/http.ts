@@ -90,4 +90,5 @@ export const ruleApi = {
 	get: (id: number) => api<ExpectRuleRecord>(`/api/expect-rules/${id}`),
 	update: (id: number, name: string, steps: unknown) =>
 		api(`/api/expect-rules/${id}`, { method: 'PUT', body: { name, steps } }),
+	remove: (id: number) => api(`/api/expect-rules/${id}`, { method: 'DELETE' }),
 }

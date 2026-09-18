@@ -60,11 +60,11 @@ func startServer(t *testing.T, hub Hub, auth *AuthConfig) *httptest.Server {
 
 func defaultAuth() *AuthConfig {
 	return &AuthConfig{
-		ValidateToken: func(token string) (string, error) {
+		ValidateToken: func(token string) (string, string, error) {
 			if token == "good-token" {
-				return "alice", nil
+				return "alice", "admin", nil
 			}
-			return "", errBadToken
+			return "", "", errBadToken
 		},
 		ProtocolVersion: protocol.ProtocolVersion,
 	}

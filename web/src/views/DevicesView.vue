@@ -10,6 +10,7 @@ import {
 	NModal,
 	NEmpty,
 	NInput,
+	NSpace,
 	useMessage,
 } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
@@ -27,6 +28,8 @@ const newProject = ref('')
 
 // DS-2A: busy popup shows occupier user + session kind + elapsed duration.
 const busyInfo = ref<Device | null>(null)
+// Device deletion asks twice (the device may hold session history).
+const deleteInfo = ref<Device | null>(null)
 
 onMounted(load)
 
@@ -71,6 +74,21 @@ function followSession() {
 	busyInfo.value = null
 }
 
+function askDelete(d: Device) {
+	deleteInfo.value = d
+}
+
+async function confirmDelete() {
+	if (!deleteInfo.value) return
+	try {
+		await deviceApi.remove(deleteInfo.value.id)
+		deleteInfo.value = null
+		await load()
+	} catch (e) {
+		message.error(String(e))
+	}
+}
+
 function elapsed(d: Device) {
 	if (!d.since) return ''
 	const mins = Math.floor((Date.now() - new Date(d.since).getTime()) / 60000)
@@ -103,13 +121,18 @@ function elapsed(d: Device) {
 					</template>
 					<div class="device-project">{{ d.project }}</div>
 					<template #footer>
-						<NButton
-							:type="d.busy ? 'default' : 'primary'"
-							size="small"
-							@click="openSession(d)"
-						>
-							{{ d.busy ? t('device.busy') : t('device.open') }}
-						</NButton>
+						<NSpace>
+							<NButton
+								:type="d.busy ? 'default' : 'primary'"
+								size="small"
+								@click="openSession(d)"
+							>
+								{{ d.busy ? t('device.busy') : t('device.open') }}
+							</NButton>
+							<NButton size="small" quaternary type="error" @click="askDelete(d)">
+								{{ t('device.delete') }}
+							</NButton>
+						</NSpace>
 					</template>
 				</NCard>
 			</NGridItem>
@@ -128,6 +151,8 @@ function elapsed(d: Device) {
 		>
 			<span v-if="busyInfo">
 				{{ t('device.sessionOf', { user: busyInfo.owner, kind: busyInfo.kind === 'task' ? t('device.task') : t('device.manual') }) }}
+				<span v-if="busyInfo.since"> · {{ t('device.duration', { n: elapsed(busyInfo) }) }}</span>
+				<span v-if="busyInfo.kind === 'task'"> · {{ t('device.taskRunning') }}</span>
 			</span>
 		</NModal>
 
@@ -139,6 +164,18 @@ function elapsed(d: Device) {
 				<NButton type="primary" @click="createDevice">{{ t('common.confirm') }}</NButton>
 			</template>
 		</NModal>
+
+		<!-- Device deletion: second confirmation (sessions history goes with it). -->
+		<NModal
+			:show="deleteInfo !== null"
+			preset="dialog"
+			:title="t('device.delete')"
+			:content="t('device.deleteConfirm')"
+			:positive-text="t('common.confirm')"
+			:negative-text="t('common.cancel')"
+			@positive-click="confirmDelete"
+			@negative-click="deleteInfo = null"
+		/>
 	</div>
 </template>
 

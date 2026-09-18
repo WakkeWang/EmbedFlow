@@ -60,6 +60,10 @@ type OpenResult struct {
 	Owner     string
 	Rejected  bool
 	Reason    string
+	// Existed is true when Open returned via the idempotent path: the
+	// session already existed (same user+device+kind) and nothing new was
+	// created -- executors must not persist it again.
+	Existed bool
 	// Occupier is set on busy-rejection: who holds the device, what kind of
 	// session, and since when (decision DS-2A wants this in the popup).
 	Occupier *OccupierInfo
@@ -189,7 +193,7 @@ func (k *Kernel) Open(req OpenRequest) OpenResult {
 	// Idempotent path: same user, same device, same kind, still active.
 	for id, s := range k.sessions {
 		if s.DeviceID == req.Device && s.Owner == req.User && s.Kind == req.Kind && s.State == StateActive {
-			return OpenResult{SessionID: id, State: s.State, Kind: s.Kind, Owner: s.Owner}
+			return OpenResult{SessionID: id, State: s.State, Kind: s.Kind, Owner: s.Owner, Existed: true}
 		}
 	}
 

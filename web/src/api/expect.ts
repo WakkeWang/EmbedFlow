@@ -3,6 +3,7 @@ export interface ExpectStep {
 	match: '' | 'contains' | 'regex' | 'exact'
 	send: string
 	send_before_wait: boolean
+	secret: boolean
 	timeout_ms: number
 	on_fail: '' | 'abort' | 'continue' | 'retry'
 	max_retries: number
@@ -21,6 +22,7 @@ export function emptyStep(): ExpectStep {
 		match: '',
 		send: '',
 		send_before_wait: false,
+		secret: false,
 		timeout_ms: 10000,
 		on_fail: '',
 		max_retries: 0,

@@ -8,16 +8,25 @@ import {
 	NDrawerContent,
 	NEmpty,
 	NTag,
+	NModal,
+	NSpace,
+	useMessage,
 } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { h } from 'vue'
 import { sessionApi, deviceApi, type SessionRecord, type Device } from '../api/http'
 
 const { t } = useI18n()
+const message = useMessage()
 
 const devices = ref<Device[]>([])
 const records = ref<SessionRecord[]>([])
 const showDrawer = ref(false)
+const currentDevice = ref<Device | null>(null)
+// Log-tail preview (requirement 3.3: last N lines in the web view).
+const tailText = ref('')
+const showTail = ref(false)
+const tailSession = ref(0)
 
 onMounted(async () => {
 	try {
@@ -28,12 +37,36 @@ onMounted(async () => {
 })
 
 async function openHistory(d: Device) {
+	currentDevice.value = d
 	try {
 		records.value = await sessionApi.history(d.id)
 	} catch {
 		records.value = []
 	}
 	showDrawer.value = true
+}
+
+async function openTail(r: SessionRecord) {
+	try {
+		const res = await sessionApi.logTail(r.id)
+		tailText.value = res.tail
+		tailSession.value = r.id
+		showTail.value = true
+	} catch {
+		message.error(t('history.noLog'))
+	}
+}
+
+async function closeActive(r: SessionRecord) {
+	try {
+		await sessionApi.close(r.id)
+		message.success(t('common.closed'))
+		if (currentDevice.value) {
+			records.value = await sessionApi.history(currentDevice.value.id)
+		}
+	} catch (e) {
+		message.error(String(e))
+	}
 }
 
 function fmtTime(v: string) {
@@ -56,6 +89,7 @@ const columns = computed<DataTableColumns<SessionRecord>>(() => [
 	{ title: t('history.end'), key: 'ended_at', render: (r) => fmtTime(r.ended_at) },
 	{ title: t('history.duration'), key: 'dur', render: fmtDuration },
 	{ title: t('history.log'), key: 'log', render: renderLog },
+	{ title: '', key: 'actions', width: 120, render: renderActions },
 ])
 
 function renderState(r: SessionRecord) {
@@ -74,7 +108,29 @@ function renderState(r: SessionRecord) {
 }
 
 function renderLog(r: SessionRecord) {
-	return h('a', { href: sessionApi.logDownloadURL(r.id), target: '_blank' }, t('history.download'))
+	return h('a', { href: sessionApi.logDownloadURL(r.id), target: '_blank', style: 'margin-right: 8px' }, t('history.download'))
+}
+
+function renderActions(r: SessionRecord) {
+	const buttons = [
+		h(
+			NButton,
+			{ size: 'tiny', quaternary: true, onClick: () => openTail(r) },
+			{ default: () => t('history.viewTail') },
+		),
+	]
+	// CEO-17A: the history page carries a close action for live sessions --
+	// a forgotten manual session must not require finding its terminal tab.
+	if (r.state === 'active') {
+		buttons.push(
+			h(
+				NButton,
+				{ size: 'tiny', type: 'error', quaternary: true, onClick: () => closeActive(r) },
+				{ default: () => t('terminal.closeSession') },
+			),
+		)
+	}
+	return h(NSpace, { size: 4 }, { default: () => buttons })
 }
 </script>
 
@@ -94,6 +150,11 @@ function renderLog(r: SessionRecord) {
 				<NDataTable v-else :columns="columns" :data="records" size="small" />
 			</NDrawerContent>
 		</NDrawer>
+
+		<!-- Log tail preview (requirement 3.3: last N lines in the web view). -->
+		<NModal :show="showTail" preset="card" :title="`${t('history.log')} #${tailSession}`" style="width: 720px">
+			<pre class="tail-pre">{{ tailText }}</pre>
+		</NModal>
 	</div>
 </template>
 
@@ -103,5 +164,14 @@ function renderLog(r: SessionRecord) {
 	gap: 8px;
 	flex-wrap: wrap;
 	margin-bottom: 12px;
+}
+.tail-pre {
+	max-height: 60vh;
+	overflow: auto;
+	font-family: 'JetBrains Mono', Consolas, monospace;
+	font-size: 12px;
+	white-space: pre-wrap;
+	word-break: break-all;
+	margin: 0;
 }
 </style>

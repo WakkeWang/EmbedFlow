@@ -8,6 +8,7 @@ import {
 	NSelect,
 	NTag,
 	NEmpty,
+	NCheckbox,
 	useMessage,
 } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
@@ -59,6 +60,33 @@ function newRule() {
 
 function editRule(r: RuleVM) {
 	current.value = r
+}
+
+function closeEditor() {
+	current.value = null
+}
+
+async function deleteRule() {
+	if (!current.value?.id) return
+	try {
+		await ruleApi.remove(current.value.id)
+		rules.value = rules.value.filter((r) => r.id !== current.value?.id)
+		current.value = null
+		message.success(t('expect.delete'))
+	} catch (e) {
+		message.error(String(e))
+	}
+}
+
+async function deleteRuleFromList(r: RuleVM) {
+	if (!r.id) return
+	try {
+		await ruleApi.remove(r.id)
+		rules.value = rules.value.filter((x) => x.id !== r.id)
+		message.success(t('expect.delete'))
+	} catch (e) {
+		message.error(String(e))
+	}
 }
 
 async function save() {
@@ -120,6 +148,16 @@ const onFailOptions = computed(() => [
 	{ label: t('expect.retry'), value: 'retry' },
 ])
 
+const matchOptions = computed(() => [
+	{ label: t('expect.matchContains'), value: 'contains' },
+	{ label: t('expect.matchRegex'), value: 'regex' },
+	{ label: t('expect.matchExact'), value: 'exact' },
+])
+
+// The retry-count checkbox is display-only (retry selected = count active);
+// the real value rides s.max_retries.
+const useMaxRetries = ref(true)
+
 // Control-character insertion (issue #7): the operator never hand-types
 // escapes; buttons append to the send input via the model.
 function appendSend(i: number, esc: string) {
@@ -142,7 +180,10 @@ function appendSend(i: number, esc: string) {
 				<template #header-extra>
 					<NTag size="small">{{ r.steps.length }} {{ t('expect.steps') }}</NTag>
 				</template>
-				<NButton size="small" @click="editRule(r)">{{ t('expect.run') === 'Run' ? 'Edit' : '编辑' }}</NButton>
+				<NSpace>
+					<NButton size="small" @click="editRule(r)">{{ t('expect.edit') }}</NButton>
+					<NButton size="small" type="error" quaternary @click="deleteRuleFromList(r)">{{ t('expect.delete') }}</NButton>
+				</NSpace>
 			</NCard>
 		</div>
 
@@ -160,6 +201,10 @@ function appendSend(i: number, esc: string) {
 				/>
 				<NButton type="primary" @click="save">{{ t('expect.save') }}</NButton>
 				<NButton @click="addStep">{{ t('expect.addStep') }}</NButton>
+				<NButton v-if="current.id" quaternary type="error" size="small" @click="deleteRule">
+					{{ t('expect.deleteRule') }}
+				</NButton>
+				<NButton quaternary size="small" @click="closeEditor">{{ t('expect.backToList') }}</NButton>
 			</div>
 
 			<!-- DS-1C: vertical card list; per-step card with inline elements. -->
@@ -189,7 +234,19 @@ function appendSend(i: number, esc: string) {
 
 				<div class="step-grid">
 					<label>{{ t('expect.awaits') }}</label>
-					<input v-model="s.await" class="mono n-input" spellcheck="false" />
+					<div>
+						<input v-model="s.await" class="mono n-input" spellcheck="false" />
+						<div v-if="s.await" class="ctrl-row">
+							<NSelect
+								v-model:value="s.match"
+								:options="matchOptions"
+								style="width: 140px"
+								size="tiny"
+								clearable
+								:placeholder="t('expect.matchContains')"
+							/>
+						</div>
+					</div>
 
 					<label>{{ t('expect.send') }}</label>
 					<div>
@@ -198,6 +255,7 @@ function appendSend(i: number, esc: string) {
 							<NButton size="tiny" @click="appendSend(i, '\\r')">{{ t('expect.crlf') }}</NButton>
 							<NButton size="tiny" @click="appendSend(i, '\\C')">{{ t('expect.ctrlC') }}</NButton>
 							<NButton size="tiny" @click="appendSend(i, '\\x')">{{ t('expect.hex') }}</NButton>
+							<NCheckbox v-model:checked="s.secret" size="small">{{ t('expect.secret') }}</NCheckbox>
 						</div>
 					</div>
 
@@ -208,7 +266,23 @@ function appendSend(i: number, esc: string) {
 					<NInputNumber v-model:value="s.delay_ms" :min="0" :step="100" style="width: 160px" />
 
 					<label>{{ t('expect.onFail') }}</label>
-					<NSelect v-model:value="s.on_fail" :options="onFailOptions" style="width: 160px" clearable />
+					<div class="ctrl-row">
+						<NSelect v-model:value="s.on_fail" :options="onFailOptions" style="width: 160px" size="small" clearable />
+						<NCheckbox v-if="s.on_fail === 'retry'" v-model:checked="useMaxRetries" size="small" disabled>
+							{{ t('expect.retry') }}
+						</NCheckbox>
+						<NInputNumber
+							v-if="s.on_fail === 'retry'"
+							v-model:value="s.max_retries"
+							:min="1"
+							:step="1"
+							size="small"
+							style="width: 120px"
+						/>
+					</div>
+
+					<label>{{ t('expect.blindSend') }}</label>
+					<NCheckbox v-model:checked="s.send_before_wait" size="small">{{ t('expect.blindSendHint') }}</NCheckbox>
 				</div>
 			</NCard>
 		</div>

@@ -24,8 +24,8 @@ var errBadToken = errors.New("invalid token")
 
 // AuthConfig carries the handshake policy.
 type AuthConfig struct {
-	// ValidateToken maps a token to its owning user, or errors.
-	ValidateToken func(token string) (string, error)
+	// ValidateToken maps a token to its owning user and role, or errors.
+	ValidateToken func(token string) (user, role string, err error)
 	// ProtocolVersion is the version this server speaks (CEO-11A).
 	ProtocolVersion uint16
 	// ServerVersion is reported back in AuthOK for client-side checks.
@@ -174,7 +174,7 @@ func handshake(c *ClientConn, hub Hub, auth *AuthConfig) bool {
 		sendAuthFail(c, fmt.Sprintf("protocol version mismatch: client %d, server %d; client needs update", af.ProtocolVersion, auth.ProtocolVersion))
 		return false
 	}
-	user, err := auth.ValidateToken(af.Token)
+	user, role, err := auth.ValidateToken(af.Token)
 	if err != nil {
 		sendAuthFail(c, "authentication failed")
 		return false
@@ -185,7 +185,7 @@ func handshake(c *ClientConn, hub Hub, auth *AuthConfig) bool {
 	c.authed = true
 	c.mu.Unlock()
 
-	if err := c.Send(protocol.Frame{Type: protocol.FrameAuthOK, Body: &protocol.AuthOKFrame{ServerVersion: auth.ServerVersion}}); err != nil {
+	if err := c.Send(protocol.Frame{Type: protocol.FrameAuthOK, Body: &protocol.AuthOKFrame{ServerVersion: auth.ServerVersion, Role: role}}); err != nil {
 		return false
 	}
 	hub.OnAuth(c)

@@ -126,12 +126,12 @@ func newCoordinator(kernel *session.Kernel, st *store.Store, dataDir string) *co
 }
 
 // validateToken satisfies transport.AuthConfig; the role rides AuthOK (1.5).
-func (h *coordinator) validateToken(token string) (string, error) {
-	user, _, ok := h.tokens.validate(token)
+func (h *coordinator) validateToken(token string) (string, string, error) {
+	user, role, ok := h.tokens.validate(token)
 	if !ok {
-		return "", errAuthFailed
+		return "", "", errAuthFailed
 	}
-	return user, nil
+	return user, role, nil
 }
 
 // login authenticates over HTTP and mints a token.
@@ -258,11 +258,16 @@ func (h *coordinator) openSession(c *transport.ClientConn, deviceID int64, kind 
 	}
 
 	sid := int64(res.SessionID)
-	if err := h.persistNewSession(sid, deviceID, kind, user); err != nil {
-		slog.Error("persist new session", "err", err)
-	}
-	if err := h.openLogger(sid); err != nil {
-		slog.Error("open session log", "session", sid, "err", err)
+	// Persist only genuinely new sessions: the kernel's idempotent open
+	// (CEO-15A) returns an existing session ID with Existed=true, and
+	// re-inserting it would be a UNIQUE violation.
+	if !res.Existed {
+		if err := h.persistNewSession(sid, deviceID, kind, user); err != nil {
+			slog.Error("persist new session", "err", err)
+		}
+		if err := h.openLogger(sid); err != nil {
+			slog.Error("open session log", "session", sid, "err", err)
+		}
 	}
 
 	h.mu.Lock()
@@ -449,9 +454,11 @@ func (h *coordinator) runExpect(c *transport.ClientConn, deviceID, ruleID int64)
 		OnSendBytes: writeTX,
 		// Live progress (issue #8, DS-3A): each step start pushes a running
 		// frame so the terminal UI's progress bar and abort button appear.
+		// Fanned out to every session subscriber (the owner and any
+		// read-only followers -- CEO-15A followers see the same progress).
 		OnStep: func(index, total int) {
 			desc := describeStep(steps[index])
-			_ = c.Send(protocol.Frame{Type: protocol.FrameExpectProgress, Body: &protocol.ExpectProgressFrame{
+			h.notifySession(sid, protocol.Frame{Type: protocol.FrameExpectProgress, Body: &protocol.ExpectProgressFrame{
 				SessionID: sid,
 				StepIndex: index,
 				StepTotal: total,
@@ -475,7 +482,7 @@ func (h *coordinator) runExpect(c *transport.ClientConn, deviceID, ruleID int64)
 		case !result.OK():
 			phase = "failed"
 		}
-		_ = c.Send(protocol.Frame{Type: protocol.FrameExpectProgress, Body: &protocol.ExpectProgressFrame{
+		h.notifySession(sid, protocol.Frame{Type: protocol.FrameExpectProgress, Body: &protocol.ExpectProgressFrame{
 			SessionID: sid,
 			StepIndex: result.StepIndex,
 			StepTotal: len(steps),
@@ -537,7 +544,8 @@ func (h *coordinator) onConfirm(c *transport.ClientConn, cf *protocol.ConfirmFra
 	}
 	resolved := *cf
 	resolved.State = "resolved"
-	_ = c.Send(protocol.Frame{Type: protocol.FrameConfirm, Body: &resolved})
+	// Fan out so read-only followers see the card resolve too (CEO-15A).
+	h.notifySession(cf.SessionID, protocol.Frame{Type: protocol.FrameConfirm, Body: &resolved})
 }
 
 // insertConfirmation creates a card: HTTP path (from the terminal page).
@@ -787,10 +795,27 @@ func (h *coordinator) apply(ev session.Event) {
 		slog.Info("session ended", "session", ev.SessionID, "state", s.State, "reason", s.EndReason)
 	case session.EventConnDown:
 		slog.Warn("client connection down (detection)", "session", ev.SessionID)
+		h.notifySession(int64(ev.SessionID), protocol.Frame{Type: protocol.FrameSessionState, Body: &protocol.SessionStateFrame{
+			SessionID: int64(ev.SessionID),
+			DeviceID:  int64(ev.DeviceID),
+			State:     "conn_down",
+			Detail:    ev.Detail,
+		}})
 	case session.EventConnWarning:
 		slog.Warn("task session in reconnect grace window", "session", ev.SessionID, "remaining", ev.Detail)
+		h.notifySession(int64(ev.SessionID), protocol.Frame{Type: protocol.FrameSessionState, Body: &protocol.SessionStateFrame{
+			SessionID: int64(ev.SessionID),
+			DeviceID:  int64(ev.DeviceID),
+			State:     "conn_warning",
+			Detail:    ev.Detail,
+		}})
 	case session.EventConnRecovered:
 		slog.Info("client connection recovered within grace window", "session", ev.SessionID)
+		h.notifySession(int64(ev.SessionID), protocol.Frame{Type: protocol.FrameSessionState, Body: &protocol.SessionStateFrame{
+			SessionID: int64(ev.SessionID),
+			DeviceID:  int64(ev.DeviceID),
+			State:     "conn_recovered",
+		}})
 	}
 }
 
@@ -806,6 +831,23 @@ func (h *coordinator) notifyDevice(deviceID int64, fr *protocol.SessionStateFram
 	h.mu.Unlock()
 	for _, cc := range targets {
 		_ = cc.Send(protocol.Frame{Type: protocol.FrameSessionState, Body: fr})
+	}
+}
+
+// notifySession pushes a frame to every connection subscribed to a session
+// (owner + read-only followers): progress and confirmations are session
+// events, not private to the creator's socket (CEO-15A).
+func (h *coordinator) notifySession(sessionID int64, fr protocol.Frame) {
+	h.mu.Lock()
+	targets := make([]*transport.ClientConn, 0, 2)
+	for cc, st := range h.conns {
+		if st.sessionID == sessionID {
+			targets = append(targets, cc)
+		}
+	}
+	h.mu.Unlock()
+	for _, cc := range targets {
+		_ = cc.Send(fr)
 	}
 }
 

@@ -133,6 +133,7 @@ func (h *coordinator) mux(frontDir string) http.Handler {
 	api.HandleFunc("POST /api/expect-rules", h.handleCreateRule)
 	api.HandleFunc("GET /api/expect-rules/{id}", h.handleGetRule)
 	api.HandleFunc("PUT /api/expect-rules/{id}", h.handleUpdateRule)
+	api.HandleFunc("DELETE /api/expect-rules/{id}", h.handleDeleteRule)
 	api.HandleFunc("GET /api/sessions/{id}", h.handleGetSession)
 	api.HandleFunc("POST /api/sessions/{id}/close", h.handleCloseSession)
 	api.HandleFunc("POST /api/sessions/{id}/confirm", h.handleInsertConfirm)
@@ -369,6 +370,19 @@ func (h *coordinator) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.UpdateExpectRule(r.Context(), store.ExpectRule{ID: id, Name: req.Name, StepsJSON: string(req.Steps)}); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *coordinator) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if err := h.store.DeleteExpectRule(r.Context(), id); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
