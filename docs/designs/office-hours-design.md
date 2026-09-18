@@ -82,7 +82,32 @@ A 的全部功能 + 内核/执行器分层 + 四类规则统一配置对象（�
 | 17A | 凭据与公开脱敏 | 会话日志密码脱敏选项列 M3 实现（M1 记 TODO）；仓库公开前对 docs/ 做一次脱敏 pass（内网 IP、真实路径、产品线名），公开前执行 |
 | 18A | 前端技术栈 | Vue3 + Vite + TS + **Naive UI**（暗色内置、tree-shake）+ **Soybean-Admin 精简起步**（i18n/权限路由/主题现成，拿到手先删演示页和 mock 层）+ Pinia + vue-i18n 9 + 原生 WebSocket 自封装（按记录 ID 订阅 + 重连退避，与决策 4A 服务端协议对齐）+ @xterm/xterm（会话终端）+ virtua 虚拟滚动（日志渲染）+ ofetch（HTTP，不用模板 mock 层） |
 
-### 会话状态机（M1，决策 1A/2A 后修订）
+### CEO 评审决策（/plan-ceo-review 2026-09-18，HOLD SCOPE）
+
+| # | 决策 | 内容 |
+|---|---|---|
+| CEO-1A | 分离超时模型 | 手动会话 = 无输入空闲计时器（30min 可配置）；任务会话 = expect 每步自带超时，无全局空闲计时器（防刷机安装阶段 10 分钟无输出被误杀） |
+| CEO-2A | 幂等开会话 | 同一用户对同一设备的重复开会话请求 = 幂等返回已有活跃会话；锁内先查后建 |
+| CEO-3A | 未知帧忽略 | 未知 WS 帧类型 = 忽略 + 警告日志（含帧类型号），不断开——协议向前兼容 |
+| CEO-4A | 不加登录限制 | 内网信任环境不做失败锁定；README 部署文档提醒部署者自行加固 |
+| CEO-5A | 三个空状态 | 设备列表/会话历史/expect 编辑页各配空状态（图标+引导文案+主操作按钮） |
+| CEO-6A | expect 双模式 | 步骤定 mode 字段：await（等到期望串继续，VBS 语义）| verdict（匹配到即出 PASS/FAIL，测试语义） |
+| CEO-7A | 启动清扫 | 服务启动扫库：遗留「活跃」会话标 FAILED（原因「服务器重启」），日志尾标标注，设备回 IDLE |
+| CEO-8A | 建表即建索引 | sessions(device_id, started_at) 复合索引 + sessions(status) 索引，建表时一并创建 |
+| CEO-9A | 运行日志最小规范 | slog 结构化 + 三个关键事件必打点（状态机转移/WS 断连含原因/expect 启停），stdout 交 systemd |
+| CEO-10A | 数据目录标准布局 | <data>/embedflow.db + <data>/sessions/<id>/log.txt + <data>/artifacts/<build-id>/ + <data>/tmp/；备份 = 拷整个 <data> |
+| CEO-11A | 握手带协议版本 | 认证帧带 protocol_version，不匹配拒绝并提示「客户端需更新」 |
+| CEO-12A | 第1周延迟 spike | 动工第 1 周插入全链路延迟 spike（最小 echo 客户端+真机 uboot 阶段），产出数字预算；超标则启动匹配器下沉客户端的 Plan B 设计——T1-T5 架构选择依赖此数字 |
+| CEO-13A | 引擎规格补齐 | expect 步骤补「延时」要素（需求 3.1.3 原文有：盲发/等待窗口场景）+ 发送内容控制字符编码定义（回车 \r、Ctrl-C 0x03、支持 HEX 转义）——防止 T6 验收静默放过缺口 |
+| CEO-14A | verdict 移到 M4 | verdict 模式（PASS/FAIL 判定语义）从 M1 移出，随 M4 测试板块一起做；M1 只做 await 模式 |
+| CEO-15A | 幂等键按用户 | 幂等键 = 用户+设备：同用户重复 → 返回自己的活跃会话；跨用户 → 忙拒绝（显示占用者）；会话属主 = 用户而非连接 |
+| CEO-16A | 双阈值分离 | 心跳丢失 5 秒 = 客户端连接断开（检测级）；任务会话判死另设 30 秒容忍窗（重连窗口内恢复则继续）——防 WiFi 闪断杀刷机；两参数可配置 |
+| CEO-17A | 四项实现修正 | T7 提序（SQLite 初始化提前到 T1 期间）+ M1 补客户端分发链路（Web 版本匹配下载页）+ expect 运行入口（终端页运行按钮→创建任务会话，运行期间禁止人工键入）+ 浏览器断连建模（刷新重连回自己活跃会话 + 会话历史页「关闭会话」动作） |
+| CEO-18A | 虚拟设备 demo 模式 | M1 附带内置虚拟设备（包装内存管道集成测试），零硬件跑通 expect 编辑+终端+日志全链路——GitHub 访客 clone 即可体验，是开源 README 种子的转化率关键；约 1 天工作量 |
+
+> 注：CEO-6A 与 CEO-14A 的关系：双模式设计保留（记录在案），但 M1 只实现 await 模式，verdict 模式在 M4 落地时启用。
+
+
 
 ```
                     ┌──────────────┐
@@ -108,11 +133,11 @@ A 的全部功能 + 内核/执行器分层 + 四类规则统一配置对象（�
 
 ## Open Questions
 
-1. ~~串口透传协议细节~~ → 已定（决策 4A：WebSocket 双帧）；全链路延迟预算仍需 M1 实测验证
-2. expect 引擎的表达力边界：变量注入、条件分支、循环、超时重试的粒度——M1 原型期用真实 VBS 翻译验证
+1. ~~串口透传协议细节~~ → 已定（决策 4A：WebSocket 双帧）；延迟数字由 CEO-12A 第 1 周 spike 产出
+2. expect 引擎的表达力边界：变量注入、条件分支、循环、超时重试的粒度——M1 原型期用真实 VBS 翻译验证（CEO-13A 已补延时要素与控制字符编码）
 3. Word 报告模板引擎选型（go docx 库 vs 后端渲染 HTML 转 docx）——M4 前调研
 4. Windows 客户端的自动更新机制（第一版手动下载 vs 内置检查更新）——M1 后评估
-5. 多人同时打开同一会话终端的并发语义（谁可输入、其余是否只读）——M1 设计期定
+5. ~~多人同时打开同一会话终端的并发语义~~ → 已定（CEO-15A：跨用户忙拒绝 + 第二查看者只读跟随；浏览器刷新重连回自己活跃会话，CEO-17A）
 
 ## Success Criteria
 
@@ -187,32 +212,36 @@ A 的全部功能 + 内核/执行器分层 + 四类规则统一配置对象（�
 ## Implementation Tasks
 Synthesized from this review's findings. Each task derives from a specific finding above. Run with Claude Code or Codex; checkbox as you ship.
 
-- [ ] **T1 (P1, human: ~3d / CC: ~4h)** — server + pkg/protocol — M1 骨架：Go workspace 布局（决策 5A）+ WS 双帧协议（决策 4A）+ 会话状态机（决策 1A，含空闲超时 11A、重连语义 12A）+ 心跳
-  - Surfaced by: Architecture review — 决策 1A/4A/5A
-  - Files: `go.work`, `pkg/protocol/`, `server/internal/session/`, `server/internal/transport/`
-  - Verify: 状态机单测（含忙拒绝、断线双分支、心跳超时、空闲超时）；协议帧解析单测
-- [ ] **T2 (P1, human: ~1d / CC: ~2h)** — server — 会话日志落盘：缓冲写（决策 8A）+ 磁盘满处理（写失败→会话标记「日志不完整」+ WS 警告）+ Range 流式下载（决策 9A）+ SerialPort 接口抽象（决策 7A，内存管道做 CI 集成测试）
-  - Surfaced by: Performance review 8A/9A + Failure modes 磁盘满缺口
+- [ ] **T0 (P1, human: ~3d / CC: ~4h)** — serial-client(echo 原型) + 真机 — 第 1 周延迟 spike（CEO-12A）：最小 echo 客户端，量全链路往返延迟（设备→COM→客户端→WS→服务端→回发），产出数字预算；超标则启动匹配器下沉客户端的 Plan B 设计
+  - Surfaced by: 外部声音 #1（承重墙假设排在最后验证）
+  - Files: `serial-client/`（临时 echo 工具）, docs（spike 记录）
+  - Verify: spike 报告含实测数字与 uboot 阶段时序余量判断
+- [ ] **T1 (P1, human: ~3d / CC: ~4h)** — server + pkg/protocol — M1 骨架：Go workspace 布局（决策 5A）+ WS 双帧协议（决策 4A，含 CEO-11A 握手版本字段）+ 会话状态机（决策 1A，含空闲超时 11A、重连语义 12A、幂等键=用户+设备 CEO-15A、双阈值 CEO-16A、启动清扫 CEO-7A）+ 心跳 + **SQLite 初始化（T7 提序并入：WAL+写队列+索引 CEO-8A）**
+  - Surfaced by: Architecture review — 决策 1A/4A/5A + CEO-7A/8A/11A/15A/16A + 外部声音 #8（T7 提序）
+  - Files: `go.work`, `pkg/protocol/`, `server/internal/{session,transport,store}/`
+  - Verify: 状态机单测（忙拒绝、断线双分支、心跳超时、空闲超时、幂等分用户、双阈值判死、启动清扫）；协议帧解析单测（未知帧忽略、版本不匹配拒绝）
+- [ ] **T2 (P1, human: ~1d / CC: ~2h)** — server — 会话日志落盘：缓冲写（决策 8A）+ 磁盘满处理（写失败→会话标记「日志不完整」+ WS 警告）+ Range 流式下载（决策 9A）+ SerialPort 接口抽象（决策 7A，内存管道做 CI 集成测试）+ 数据目录标准布局（CEO-10A）
+  - Surfaced by: Performance review 8A/9A + Failure modes 磁盘满缺口 + CEO-10A
   - Files: `server/internal/sessionlog/`
   - Verify: 内存管道集成测试（高频输出压测）+ 磁盘满注入测试
-- [ ] **T3 (P1, human: ~2d / CC: ~3h)** — server — expect 引擎：四要素 + 三匹配方式 + 超时失败动作 + 多步骤序列
-  - Surfaced by: Test review 代码路径图 + 设计文档 OQ2
+- [ ] **T3 (P1, human: ~2d / CC: ~3h)** — server — expect 引擎：四要素 + 延时步骤与控制字符编码（CEO-13A：回车 \r、Ctrl-C 0x03、HEX 转义）+ 超时失败动作 + 多步骤序列 + await 模式（verdict 模式移 M4，CEO-14A）
+  - Surfaced by: Test review 代码路径图 + CEO-13A/14A
   - Files: `server/internal/expect/`
-  - Verify: 表驱动单测（三匹配方式 × 三失败动作 × 超时分支）
+  - Verify: 表驱动单测（await 模式 × 三匹配方式 × 三失败动作 × 超时分支 × 延时步骤 × 控制字符编码）
 - [ ] **T4 (P1, human: ~2d / CC: ~3h)** — serial-client — 最小客户端：登录 token（DPAPI 存储，决策 13A）+ COM 扫描/打开/共享 + 断线重连（退避，只恢复共享态，决策 12A）+ 收发计数
   - Surfaced by: 设计文档 M1 交付物 + 3A 传输认证
   - Files: `serial-client/`
   - Verify: 集成测试（对 server 起的 WS 服务）+ 真机手动验收
-- [ ] **T5 (P2, human: ~2d / CC: ~3h)** — server + web — Web 终端与 expect 编辑：xterm.js 终端（双人并发 = 只读跟随，OQ5 第一版默认）+ 手动 step 占位对象 + PASS/FAIL 确认页 + **expect 序列最小编辑 UI（决策 16A）**
-  - Surfaced by: Test review 用户流程 + 设计文档 OQ5 + 外部声音 #3（验收编辑路径）
+- [ ] **T5 (P2, human: ~2.5d / CC: ~3.5h)** — server + web — Web 终端与 expect 编辑：xterm.js 终端（跨用户忙拒绝+第二查看者只读跟随 CEO-15A；浏览器刷新重连回自己活跃会话 CEO-17A）+ 手动 step 占位对象 + PASS/FAIL 确认页 + expect 序列最小编辑 UI（决策 16A）+ expect 运行入口（终端页运行按钮创建任务会话，运行期间禁止人工键入 CEO-17A）+ 三个空状态（CEO-5A）+ 客户端版本匹配下载页（CEO-17A）
+  - Surfaced by: Test review 用户流程 + CEO-5A/15A/17A + 外部声音 #9（分发链路）
   - Files: `server/internal/api/`, `web/src/views/session/`
   - Verify: 集成测试 + 手动验收
-- [ ] **T6 (P2, human: ~1d / CC: ~1h)** — 全部 — M1 验收：真实 VBS 翻译成 expect 规则（经编辑 UI 录入）全链路实测（真机 uboot 时序验证）
+- [ ] **T6 (P2, human: ~2-3d / CC: ~1h)** — 全部 — M1 验收：真实 VBS 翻译成 expect 规则（经编辑 UI 录入）全链路实测（真机 uboot 时序验证）；估时 2-3 天（真机调试反馈环无法压缩，外部声音 #11）
   - Surfaced by: 设计文档验收标准
   - Files: docs（验收记录）
   - Verify: 手动验收记录归档
-- [ ] **T7 (P3, human: ~2h / CC: ~15min)** — server — SQLite 初始化：WAL + busy_timeout + 单写协程队列（决策 10A）
-  - Surfaced by: Performance review 10A
+- [ ] **T7 (P3, human: ~1h / CC: ~15min)** — server — SQLite 初始化已并入 T1（外部声音 #8：持久化是地基不是收尾）；本条保留编号占位：会话表索引在 T1 建表语句中创建（CEO-8A）
+  - Surfaced by: Performance review 10A + 外部声音 #8
   - Files: `server/internal/store/`
   - Verify: 并发写压测（4 批次模拟并发）
 - [ ] **T8 (P3, human: ~1h / CC: ~15min)** — docs — 仓库公开前脱敏 pass：内网 IP（192.168.0.80）、真实路径（E:\、D:\Hermes\）、产品线名的脱敏决策与执行（决策 17A）
@@ -223,19 +252,23 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Surfaced by: 外部声音 #4（日志通道明文密码）
   - Files: `server/internal/sessionlog/`
   - Verify: 含密码的会话日志行脱敏显示
+- [ ] **T10 (P2, human: ~1d / CC: ~2h)** — server — 虚拟设备 demo 模式（CEO-18A）：内置虚拟设备（包装内存管道集成测试），零硬件跑通 expect 编辑+终端+日志全链路；启动参数 -demo 启用
+  - Surfaced by: 外部声音 #10（GitHub 访客零复现路径，种子转化率）
+  - Files: `server/internal/virtualdev/`, `server/cmd/`
+  - Verify: 无真机环境从 clone 到跑通 demo 的全流程记录（写入 README）
 
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
-| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | 未运行（可选） |
-| Outside Review | claude subagent（/plan-eng-review 内建） | Independent 2nd opinion | 1 | completed | 8 项发现：排期虚、M1 验证对象质疑、验收缺编辑路径、凭据泄漏通道、Wails 性价比、运维依赖叙事、M2 仓库假设、杂项 5 条；处置：M1 保持+15 修正、8 项采纳 |
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | clean | HOLD SCOPE：11 节评审 11 发现闭环（CEO-1A~11A），外部声音 12 项发现处置（CEO-12A~18A，7 采纳 1 部分采纳 4 拒绝），任务 T0-T10 共 11 项 |
+| Outside Review | claude subagent（/plan-ceo-review 内建） | Independent 2nd opinion | 1 | completed | 12 项发现：延迟 spike 前置、引擎规格漂移（延时+控制字符）、verdict 移 M4、幂等键边界、双阈值分离、T7 提序、分发链路缺失、expect 入口、浏览器断连、虚拟 demo、T6 估时、Soybean 成本备注；处置见 CEO-12A~18A |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | clean | 10 决策闭环（1A-10A），1 个关键缺口（磁盘满静默失败）已立 T2；外部声音后扩至 17 决策、9 任务 |
-| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | 未运行（无 UI 代码） |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | 未运行（实现后用 /design-review 补） |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | 未运行 |
 
-- **OUTSIDE COVERAGE:** provider=claude subagent（Codex 未安装），phase=plan-review，outside_status=completed，8 项发现全部呈现给用户并逐项决策（M1 收窄建议被否，保持+修正采纳）
-- **CROSS-MODEL:** 原生评审（Claude）与外部声音（Claude subagent，fresh context）在技术选型上一致（10 决策未被挑战）；分歧在 M1 范围与排期——外部声音主张砍到两周三件套，用户裁决保持 M1 范围 + 排期修正（3 周→4-6 周）+ 部分采纳（编辑 UI、空闲超时、重连语义、token 存储、脱敏、com0com 抽象、备份说明、star 节奏）
-- **VERDICT:** ENG CLEARED — ready to implement
+- **OUTSIDE COVERAGE:** provider=claude subagent（Codex 未安装），phase=plan-review（CEO 轮），outside_status=completed，12 项发现全部呈现给用户并逐项决策
+- **CROSS-MODEL:** 原生 HOLD SCOPE 评审与外部声音在架构决策上一致（18A 决策未挑战）；外部声音聚焦时序假设（延迟 spike 前置）、规格漂移（延时要素）、语义边界（幂等键/双阈值）——用户全盘采纳其两个动工前修订 + demo 模式 + 四项实现修正
+- **VERDICT:** CEO + ENG CLEARED — ready to implement
 
 NO UNRESOLVED DECISIONS
