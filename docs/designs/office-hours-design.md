@@ -167,7 +167,7 @@ A 的全部功能 + 内核/执行器分层 + 四类规则统一配置对象（�
 
 ## Distribution Plan
 
-- 服务器：GitHub Releases 单二进制（linux/amd64，embed 前端产物）+ systemd 部署文档 + docker 镜像
+- 服务器：GitHub Releases 单二进制（linux/amd64 **与 linux/arm64**，embed 前端产物）+ systemd 部署文档 + docker 镜像；Go 依赖全纯 Go（modernc.org/sqlite，无 cgo），`CGO_ENABLED=0` 交叉编译即出双架构产物（已验证）
 - 串口客户端：GitHub Releases Windows 安装包/exe，服务器 Web 界面提供版本匹配的下载
 - CI/CD：GitHub Actions（测试 + 构建 + Release 发布）；注意仓库公开前跑 gitleaks 历史扫描
 - 版本策略：semver，v0.x 阶段小步快跑，每个 minor 版本都有可展示的改进点
