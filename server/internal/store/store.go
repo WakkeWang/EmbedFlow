@@ -15,24 +15,22 @@ import (
 // Session is a persisted session record. Field vocabulary matches the
 // session kernel (CONTEXT.md: 会话).
 type Session struct {
-	ID        int64
-	DeviceID  int64
-	Kind      string // manual | task
-	Owner     string
-	State     string // active | closed | failed
-	StartedAt time.Time
-	EndedAt   time.Time
-	EndReason string
-	// LogIncomplete marks a session whose log had write failures (design doc
-	// Failure modes: the disk-full gap) -- surfaced in UI and reports.
-	LogIncomplete bool
+	ID            int64     `json:"id"`
+	DeviceID      int64     `json:"device_id"`
+	Kind          string    `json:"kind"` // manual | task
+	Owner         string    `json:"owner"`
+	State         string    `json:"state"` // active | closed | failed
+	StartedAt     time.Time `json:"started_at"`
+	EndedAt       time.Time `json:"ended_at"`
+	EndReason     string    `json:"end_reason"`
+	LogIncomplete bool      `json:"log_incomplete"`
 }
 
 // Device is a registered target machine (CONTEXT.md: 设备).
 type Device struct {
-	ID      int64
-	Name    string
-	Project string
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	Project string `json:"project"`
 }
 
 // Store wraps the SQLite handle plus the serializing write queue.

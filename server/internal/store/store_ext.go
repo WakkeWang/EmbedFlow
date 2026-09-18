@@ -21,22 +21,22 @@ type User struct {
 // ExpectRule is a stored expect sequence (issue #7): team-shared,
 // reusable, reviewable configuration.
 type ExpectRule struct {
-	ID        int64
-	Name      string
-	StepsJSON string
-	UpdatedAt time.Time
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	StepsJSON string    `json:"steps_json"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Confirmation is one human confirmation card (issue #9).
 type Confirmation struct {
-	ID         int64
-	SessionID  int64
-	Prompt     string
-	State      string // pending | resolved
-	Result     string // pass | fail
-	Note       string
-	CreatedAt  time.Time
-	ResolvedAt time.Time
+	ID         int64     `json:"id"`
+	SessionID  int64     `json:"session_id"`
+	Prompt     string    `json:"prompt"`
+	State      string    `json:"state"`  // pending | resolved
+	Result     string    `json:"result"` // pass | fail
+	Note       string    `json:"note"`
+	CreatedAt  time.Time `json:"created_at"`
+	ResolvedAt time.Time `json:"resolved_at"`
 }
 
 // CreateUser inserts an account with a bcrypt-hashed password.

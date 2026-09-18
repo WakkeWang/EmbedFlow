@@ -8,8 +8,8 @@ export default defineConfig({
 		proxy: {
 			// Dev proxy: API and WS ride the same origin as the dev server
 			// (production serves the built assets from the Go binary instead).
-			'/api': 'http://127.0.0.1:18500',
-			'/ws': { target: 'ws://127.0.0.1:18500', ws: true },
+			'/api': 'http://127.0.0.1:18601',
+			'/ws': { target: 'ws://127.0.0.1:18601', ws: true },
 		},
 	},
 })

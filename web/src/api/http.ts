@@ -1,7 +1,6 @@
 import { ofetch } from 'ofetch'
 
-// HTTP client (decision 18A: ofetch). Base URL empty = same origin; token
-// rides the Authorization header until the real login slice lands.
+// HTTP client (decision 18A: ofetch). Token rides the Authorization header.
 export const TOKEN_KEY = 'embedflow.token'
 
 export function getToken(): string {
@@ -37,6 +36,12 @@ export interface Device {
 	id: number
 	name: string
 	project: string
+	busy: boolean
+	owner?: string
+	kind?: string
+	session_id?: number
+	shared: boolean
+	since?: string
 }
 
 export interface SessionRecord {
@@ -51,16 +56,38 @@ export interface SessionRecord {
 	log_incomplete: boolean
 }
 
-// M1 interim: device list and history endpoints will land server-side with
-// the session open flow (T5 server part). These helpers target them.
+export interface ExpectRuleRecord {
+	id: number
+	name: string
+	steps_json: string
+	updated_at: string
+}
+
 export const deviceApi = {
 	list: () => api<Device[]>('/api/devices'),
+	create: (name: string, project: string) =>
+		api<{ id: number }>('/api/devices', { method: 'POST', body: { name, project } }),
+	remove: (id: number) => api(`/api/devices/${id}`, { method: 'DELETE' }),
 }
 
 export const sessionApi = {
 	history: (deviceId: number) => api<SessionRecord[]>(`/api/devices/${deviceId}/sessions`),
-	close: (sessionId: number) =>
-		api(`/api/sessions/${sessionId}/close`, { method: 'POST' }),
+	close: (sessionId: number) => api(`/api/sessions/${sessionId}/close`, { method: 'POST' }),
 	logDownloadURL: (sessionId: number) =>
 		`/api/sessions/${sessionId}/log/download?token=${encodeURIComponent(getToken())}`,
+	logTail: (sessionId: number, n = 1000) =>
+		api<{ tail: string }>(`/api/sessions/${sessionId}/log/tail?n=${n}`),
+	insertConfirm: (sessionId: number, prompt: string) =>
+		api<{ id: number }>(`/api/sessions/${sessionId}/confirm`, { method: 'POST', body: { prompt } }),
+	confirmations: (sessionId: number) =>
+		api<unknown[]>(`/api/sessions/${sessionId}/confirmations`),
+}
+
+export const ruleApi = {
+	list: () => api<ExpectRuleRecord[]>('/api/expect-rules'),
+	create: (name: string, steps: unknown) =>
+		api<{ id: number }>('/api/expect-rules', { method: 'POST', body: { name, steps } }),
+	get: (id: number) => api<ExpectRuleRecord>(`/api/expect-rules/${id}`),
+	update: (id: number, name: string, steps: unknown) =>
+		api(`/api/expect-rules/${id}`, { method: 'PUT', body: { name, steps } }),
 }

@@ -24,12 +24,28 @@ type virtualDevice struct {
 	closed bool
 }
 
-// startDemoDevice registers the virtual device and seeds a demo expect rule.
+// startDemoDevice registers the virtual device (idempotently: exactly one
+// per data dir) and seeds a demo expect rule.
 func (h *coordinator) startDemoDevice() error {
-	devID, err := h.store.CreateDevice(context.Background(), "demo-virtual", "demo")
+	// Reuse an existing demo device across restarts.
+	devs, err := h.store.ListDevices(context.Background())
 	if err != nil {
 		return err
 	}
+	var devID int64
+	for _, d := range devs {
+		if d.Name == "demo-virtual" {
+			devID = d.ID
+			break
+		}
+	}
+	if devID == 0 {
+		devID, err = h.store.CreateDevice(context.Background(), "demo-virtual", "demo")
+		if err != nil {
+			return err
+		}
+	}
+	vd := &virtualDevice{deviceID: devID}
 	// Idempotent demo rule exercising every engine feature: await, send,
 	// delay (silent install), and a long-running sequence.
 	steps := []expect.Step{
@@ -50,18 +66,36 @@ func (h *coordinator) startDemoDevice() error {
 	if err != nil {
 		return err
 	}
-	if _, err := h.store.CreateExpectRule(context.Background(), "demo-flash", string(raw)); err != nil {
+	// Seed the demo rule once per data dir.
+	rules, _ := h.store.ListExpectRules(context.Background())
+	for _, r := range rules {
+		if r.Name == "demo-flash" {
+			h.mu.Lock()
+			h.demoRuleID = r.ID
+			h.mu.Unlock()
+			go h.attachVirtual(vd, devID)
+			return nil
+		}
+	}
+	ruleID, err := h.store.CreateExpectRule(context.Background(), "demo-flash", string(raw))
+	if err != nil {
 		return err
 	}
+	h.mu.Lock()
+	h.demoRuleID = ruleID
+	h.mu.Unlock()
 
-	vd := &virtualDevice{deviceID: devID}
+	h.attachVirtual(vd, devID)
+	return nil
+}
+
+// attachVirtual wires the device and starts its script loop.
+func (h *coordinator) attachVirtual(vd *virtualDevice, devID int64) {
 	h.mu.Lock()
 	h.virtual = vd
 	h.mu.Unlock()
-
 	go vd.run(h)
 	slog.Info("demo virtual device ready", "device", devID)
-	return nil
 }
 
 // run plays the device script forever: emit prompts, await operator bytes.

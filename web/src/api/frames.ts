@@ -11,6 +11,8 @@ export const Frame = {
 	DeviceStatus: 6,
 	SessionCtrl: 7,
 	SessionState: 8,
+	ExpectProgress: 9,
+	Confirm: 10,
 } as const
 
 export type FrameType = (typeof Frame)[keyof typeof Frame]
@@ -39,6 +41,28 @@ export interface SessionStateFrame {
 	device_id: number
 	state: string
 	detail?: string
+	occupier_user?: string
+	occupier_kind?: string
+	occupier_since?: string
+	owner_is_you?: boolean
+}
+
+export interface ExpectProgressFrame {
+	session_id: number
+	step_index: number
+	step_total: number
+	step_desc?: string
+	phase: string
+	detail?: string
+}
+
+export interface ConfirmFrame {
+	session_id: number
+	confirm_id: number
+	prompt: string
+	state: string
+	result?: string
+	note?: string
 }
 
 export type ControlBody =

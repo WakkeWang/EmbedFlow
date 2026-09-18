@@ -101,6 +101,8 @@ type coordinator struct {
 	sharedBySession map[int64]*sharedTransport
 	// virtual is the demo device (CEO-18A); nil without -demo.
 	virtual *virtualDevice
+	// demoRuleID is the seeded demo rule (0 without -demo).
+	demoRuleID int64
 	// virtualSession tracks the demo device's live session for fan-out.
 	virtualSession map[int64]int64
 	// virtualPorts are the live engine ports for virtual runs.

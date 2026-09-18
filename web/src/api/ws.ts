@@ -17,6 +17,9 @@ interface WSOpts {
 	onControl?: (f: ParsedFrame) => void
 	// onState reports connection transitions for the disconnect overlay (DS-2B).
 	onState?: (s: ConnState, attempt: number) => void
+	// onAuthFail fires when the server refuses the handshake (version
+	// mismatch, bad token): the caller should not expect a retry to help.
+	onAuthFail?: (reason: string) => void
 }
 
 // wsURL derives the WebSocket endpoint from the page location.
@@ -56,7 +59,6 @@ export class WSClient {
 				protocol_version: ProtocolVersion,
 				client_version: 'web-dev',
 			})
-			this.startHeartbeat()
 		}
 
 		ws.onmessage = (ev) => {
@@ -69,7 +71,10 @@ export class WSClient {
 		}
 
 		ws.onclose = () => {
-			this.stopHeartbeat()
+			if (this.heartbeatTimer) {
+				clearInterval(this.heartbeatTimer)
+				this.heartbeatTimer = null
+			}
 			if (this.closedByUser) {
 				this.setState('closed')
 				return
@@ -84,21 +89,25 @@ export class WSClient {
 
 	close() {
 		this.closedByUser = true
-		this.stopHeartbeat()
+		if (this.heartbeatTimer) {
+			clearInterval(this.heartbeatTimer)
+			this.heartbeatTimer = null
+		}
 		this.ws?.close()
 		this.ws = null
 		this.setState('closed')
 	}
 
-	sendControl(type: number, body: unknown) {
+	sendControl(type: FrameType, body: unknown) {
 		if (this.ws?.readyState === WebSocket.OPEN) {
-			this.ws.send(encode(type as FrameType, body))
+			this.ws.send(encode(type, body))
 		}
 	}
 
 	sendBinary(data: Uint8Array) {
 		if (this.ws?.readyState === WebSocket.OPEN) {
-			this.ws.send(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer)
+			const buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
+			this.ws.send(buf)
 		}
 	}
 
@@ -111,15 +120,20 @@ export class WSClient {
 		}
 		switch (f.type) {
 			case Frame.AuthOK:
+				// Handshake complete: start the liveness loop.
 				this.attempt = 0
 				this.setState('open')
+				this.startHeartbeat()
 				break
 			case Frame.AuthFail:
 				// Version mismatch or bad token: do not retry the same way.
 				this.closedByUser = true
-				this.stopHeartbeat()
+				if (this.heartbeatTimer) {
+					clearInterval(this.heartbeatTimer)
+					this.heartbeatTimer = null
+				}
 				this.setState('closed')
-				this.opts.onControl?.(f)
+				this.opts.onAuthFail?.((f.body as { reason?: string })?.reason ?? 'auth failed')
 				break
 			default:
 				this.opts.onControl?.(f)
@@ -127,18 +141,11 @@ export class WSClient {
 	}
 
 	private startHeartbeat() {
-		this.stopHeartbeat()
+		if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
 		this.heartbeatTimer = setInterval(() => {
 			this.seq++
 			this.sendControl(Frame.Heartbeat, { seq: this.seq })
 		}, 2000)
-	}
-
-	private stopHeartbeat() {
-		if (this.heartbeatTimer) {
-			clearInterval(this.heartbeatTimer)
-			this.heartbeatTimer = null
-		}
 	}
 
 	private scheduleReconnect() {

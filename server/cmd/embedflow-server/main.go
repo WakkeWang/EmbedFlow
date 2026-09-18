@@ -115,9 +115,8 @@ func (h *coordinator) mux(frontDir string) http.Handler {
 		ServerVersion:   version,
 	})))
 
-	// REST API: token-gated.
+	// REST API: token-gated, except /api/login (the gate itself).
 	api := http.NewServeMux()
-	api.HandleFunc("POST /api/login", h.handleLogin)
 	api.HandleFunc("GET /api/me", h.handleMe)
 	api.HandleFunc("GET /api/devices", h.handleListDevices)
 	api.HandleFunc("POST /api/devices", h.handleCreateDevice)
@@ -134,6 +133,7 @@ func (h *coordinator) mux(frontDir string) http.Handler {
 	api.HandleFunc("GET /api/sessions/{id}/log/tail", h.handleLogTail)
 	api.Handle("GET /api/sessions/{id}/log/download", sessionlog.DownloadHandler(h.dataDir))
 
+	mux.HandleFunc("POST /api/login", h.handleLogin)
 	mux.Handle("/api/", authmw.Token("", func(tok string) bool {
 		_, _, ok := h.tokens.validate(tok)
 		return ok

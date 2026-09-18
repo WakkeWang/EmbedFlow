@@ -7,8 +7,10 @@ import {
 	NDrawer,
 	NDrawerContent,
 	NEmpty,
+	NTag,
 } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
+import { h } from 'vue'
 import { sessionApi, deviceApi, type SessionRecord, type Device } from '../api/http'
 
 const { t } = useI18n()
@@ -49,56 +51,44 @@ function fmtDuration(r: SessionRecord) {
 
 const columns = computed<DataTableColumns<SessionRecord>>(() => [
 	{ title: '#', key: 'id', width: 60 },
-	{
-		title: t('history.state'),
-		key: 'state',
-		width: 90,
-		render: (r) =>
-			hTag(
-				r.state === 'active'
-					? t('common.active')
-					: r.state === 'failed'
-						? t('common.failed')
-						: t('common.closed'),
-				r.state === 'active' ? 'info' : r.state === 'failed' ? 'error' : 'default'
-			),
-	},
+	{ title: t('history.state'), key: 'state', width: 100, render: renderState },
 	{ title: t('history.start'), key: 'started_at', render: (r) => fmtTime(r.started_at) },
 	{ title: t('history.end'), key: 'ended_at', render: (r) => fmtTime(r.ended_at) },
-	{ title: t('history.duration'), key: 'dur', render: (r) => fmtDuration(r) },
-	{
-		title: t('history.log'),
-		key: 'log',
-		render: (r) =>
-			hLink(sessionApi.logDownloadURL(r.id), t('history.download')),
-	},
+	{ title: t('history.duration'), key: 'dur', render: fmtDuration },
+	{ title: t('history.log'), key: 'log', render: renderLog },
 ])
 
-import { h } from 'vue'
-import { NTag as TagComp } from 'naive-ui'
-function hTag(text: string, type: 'info' | 'error' | 'default' | 'success') {
-	return h(TagComp, { size: 'small', type }, { default: () => text })
+function renderState(r: SessionRecord) {
+	const label =
+		r.state === 'active'
+			? t('common.active')
+			: r.state === 'failed'
+				? t('common.failed')
+				: t('common.closed')
+	const type = r.state === 'active' ? 'info' : r.state === 'failed' ? 'error' : 'default'
+	// Log-incomplete gets its own warning badge (design doc disk-full gap).
+	if (r.log_incomplete) {
+		return h('span', [h(NTag, { size: 'small', type }, { default: () => label }), ' !'])
+	}
+	return h(NTag, { size: 'small', type }, { default: () => label })
 }
-function hLink(href: string, text: string) {
-	return h('a', { href, target: '_blank' }, text)
+
+function renderLog(r: SessionRecord) {
+	return h('a', { href: sessionApi.logDownloadURL(r.id), target: '_blank' }, t('history.download'))
 }
 </script>
 
 <template>
+	<!-- DS-7C: per-device history drawer. -->
 	<div>
 		<h2>{{ t('history.title') }}</h2>
 		<div class="device-chips">
-			<NButton
-				v-for="d in devices"
-				:key="d.id"
-				quaternary
-				@click="openHistory(d)"
-			>
+			<NButton v-for="d in devices" :key="d.id" quaternary @click="openHistory(d)">
 				{{ d.name }}
 			</NButton>
 		</div>
 
-		<NDrawer v-model:show="showDrawer" :width="640">
+		<NDrawer v-model:show="showDrawer" :width="680">
 			<NDrawerContent :title="t('history.title')" closable>
 				<NEmpty v-if="records.length === 0" :description="t('history.empty')" />
 				<NDataTable v-else :columns="columns" :data="records" size="small" />

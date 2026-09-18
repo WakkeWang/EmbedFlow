@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import {
 	NCard,
 	NButton,
@@ -8,34 +8,44 @@ import {
 	NSelect,
 	NTag,
 	NEmpty,
-	NModal,
 	useMessage,
 } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
 	emptyStep,
 	validateSteps,
-	type ExpectRule,
+	type ExpectStep,
 } from '../api/expect'
+import { ruleApi } from '../api/http'
 
 const { t } = useI18n()
 const message = useMessage()
 
-// M1 interim: rules persist via /api/expect when the server part lands;
-// until then they live in localStorage so the editor is fully usable.
-const STORAGE_KEY = 'embedflow.expect.rules'
-
-function loadRules(): ExpectRule[] {
-	try {
-		return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]')
-	} catch {
-		return []
-	}
+interface RuleVM {
+	id?: number
+	name: string
+	steps: ExpectStep[]
 }
 
-const rules = ref<ExpectRule[]>(loadRules())
-const current = ref<ExpectRule | null>(null)
+const rules = ref<RuleVM[]>([])
+const current = ref<RuleVM | null>(null)
 const errors = ref<Map<number, string>>(new Map())
+const loading = ref(true)
+
+onMounted(async () => {
+	try {
+		const list = await ruleApi.list()
+		rules.value = list.map((r) => ({
+			id: r.id,
+			name: r.name,
+			steps: JSON.parse(r.steps_json) as ExpectStep[],
+		}))
+	} catch {
+		rules.value = []
+	} finally {
+		loading.value = false
+	}
+})
 
 const stepCount = computed(() => current.value?.steps.length ?? 0)
 
@@ -47,28 +57,32 @@ function newRule() {
 	current.value = { name: '', steps: [emptyStep()] }
 }
 
-function persist() {
-	localStorage.setItem(STORAGE_KEY, JSON.stringify(rules.value))
+function editRule(r: RuleVM) {
+	current.value = r
 }
 
-function save() {
+async function save() {
 	if (!current.value) return
 	errors.value = validateSteps(current.value.steps)
 	if (errors.value.size > 0) {
-		// DS-7A: jump to the first offending step.
 		const first = Math.min(...errors.value.keys())
 		jumpTo(first)
 		return
 	}
-	if (!rules.value.includes(current.value)) {
-		rules.value.push(current.value)
+	try {
+		if (current.value.id) {
+			await ruleApi.update(current.value.id, current.value.name, current.value.steps)
+		} else {
+			const res = await ruleApi.create(current.value.name, current.value.steps)
+			current.value.id = res.id
+		}
+		if (!rules.value.find((r) => r.id === current.value?.id)) {
+			rules.value.push(current.value)
+		}
+		message.success(t('expect.save'))
+	} catch (e) {
+		message.error(String(e))
 	}
-	persist()
-	message.success(t('expect.save'))
-}
-
-function editRule(r: ExpectRule) {
-	current.value = r
 }
 
 function addStep() {
@@ -91,7 +105,7 @@ function moveUp(i: number) {
 }
 
 function moveDown(i: number) {
-	if (!current.value || !current.value.steps || i >= current.value.steps.length - 1) return
+	if (!current.value || i >= current.value.steps.length - 1) return
 	const [s] = current.value.steps.splice(i, 1)
 	current.value.steps.splice(i + 1, 0, s)
 }
@@ -107,13 +121,11 @@ const onFailOptions = computed(() => [
 ])
 
 // Control-character insertion (issue #7): the operator never hand-types
-// escapes; buttons append to the focused send input via the model.
+// escapes; buttons append to the send input via the model.
 function appendSend(i: number, esc: string) {
 	if (!current.value) return
 	current.value.steps[i].send += esc
 }
-
-const showAbortConfirm = ref(false)
 </script>
 
 <template>
@@ -123,23 +135,20 @@ const showAbortConfirm = ref(false)
 			<NButton type="primary" @click="newRule">{{ t('expect.new') }}</NButton>
 		</div>
 
-		<NEmpty
-			v-if="rules.length === 0 && !current"
-			:description="t('expect.emptyHint')"
-		/>
+		<NEmpty v-if="!loading && rules.length === 0 && !current" :description="t('expect.emptyHint')" />
 
 		<div v-if="rules.length > 0 && !current" class="rule-list">
-			<NCard v-for="r in rules" :key="r.name" size="small" :title="r.name">
+			<NCard v-for="r in rules" :key="r.id" size="small" :title="r.name">
 				<template #header-extra>
 					<NTag size="small">{{ r.steps.length }} {{ t('expect.steps') }}</NTag>
 				</template>
-				<NButton size="small" @click="editRule(r)">{{ t('expect.save') }}/{{ t('common.close') }}</NButton>
+				<NButton size="small" @click="editRule(r)">{{ t('expect.run') === 'Run' ? 'Edit' : '编辑' }}</NButton>
 			</NCard>
 		</div>
 
 		<div v-if="current" class="editor">
 			<div class="header-row">
-				<NInput v-model:value="current.name" :placeholder="'rule name'" style="width: 240px" />
+				<NInput v-model:value="current.name" placeholder="rule name" style="width: 240px" />
 				<span class="step-total">{{ stepCount }} {{ t('expect.steps') }}</span>
 				<!-- DS-7A: step count + jump-to-step at page top, no grouping. -->
 				<NSelect
@@ -203,17 +212,6 @@ const showAbortConfirm = ref(false)
 				</div>
 			</NCard>
 		</div>
-
-		<NModal
-			:show="showAbortConfirm"
-			preset="dialog"
-			:title="t('expect.running')"
-			:content="t('expect.abortConfirm')"
-			:positive-text="t('common.confirm')"
-			:negative-text="t('common.cancel')"
-			@positive-click="showAbortConfirm = false"
-			@negative-click="showAbortConfirm = false"
-		/>
 	</div>
 </template>
 
