@@ -9,18 +9,19 @@ import (
 	"strings"
 )
 
-// Token wraps a handler so it only serves requests carrying the shared
-// token (Authorization: Bearer, or ?token= for download links). M1 runs a
-// single bootstrap token; real per-user sessions land with the login slice
-// and this middleware swaps its validator then.
-func Token(token string, next http.Handler) http.Handler {
+// Token wraps a handler so it only serves requests whose token validates
+// (Authorization: Bearer, or ?token= for download links). M1 runs a single
+// bootstrap token when static is non-empty; otherwise validate decides.
+func Token(static string, validate func(string) bool, next http.Handler) http.Handler {
+	check := func(tok string) bool {
+		if static != "" {
+			return subtle.ConstantTimeCompare([]byte(tok), []byte(static)) == 1
+		}
+		return validate != nil && validate(tok)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got := bearer(r)
-		if got == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+		if got == "" || !check(got) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

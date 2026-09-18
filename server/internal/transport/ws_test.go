@@ -27,6 +27,8 @@ type heartbeatEvt struct {
 	seq uint64
 }
 
+func (h *testHub) OnAuth(c *ClientConn) {}
+
 func (h *testHub) OnControl(c *ClientConn, f *protocol.Frame) {
 	if h.frames != nil {
 		h.frames <- f

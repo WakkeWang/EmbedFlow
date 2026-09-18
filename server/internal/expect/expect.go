@@ -6,6 +6,7 @@
 package expect
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -311,8 +312,11 @@ func (r *Runner) readLoop(errCh chan<- error) {
 		default:
 		}
 		if err != nil {
-			// Deadline ticks are normal pacing; real errors end the loop.
-			if strings.Contains(err.Error(), "deadline") {
+			// Bounded-read timeouts are normal pacing (pipes, the shared
+			// transport and the virtual port all return timeout errors);
+			// anything else really ends the loop.
+			msg := err.Error()
+			if strings.Contains(msg, "deadline") || strings.Contains(msg, "timeout") {
 				continue
 			}
 			errCh <- err
@@ -388,6 +392,21 @@ func EncodeSend(s string) ([]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+// DecodeSteps parses stored rule JSON into engine steps (issue #7: rules
+// persist as JSON).
+func DecodeSteps(data []byte) ([]Step, error) {
+	var steps []Step
+	if err := json.Unmarshal(data, &steps); err != nil {
+		return nil, fmt.Errorf("expect: decode steps: %w", err)
+	}
+	return steps, nil
+}
+
+// EncodeSteps serializes steps for storage.
+func EncodeSteps(steps []Step) ([]byte, error) {
+	return json.Marshal(steps)
 }
 
 // Validate checks a sequence before it is stored or run: each step must do

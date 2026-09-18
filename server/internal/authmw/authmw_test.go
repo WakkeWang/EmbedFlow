@@ -8,7 +8,7 @@ import (
 
 func TestToken_AcceptsBearer(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	srv := httptest.NewServer(Token("secret", next))
+	srv := httptest.NewServer(Token("secret", nil, next))
 	defer srv.Close()
 
 	req, _ := http.NewRequest("GET", srv.URL, nil)
@@ -25,7 +25,7 @@ func TestToken_AcceptsBearer(t *testing.T) {
 
 func TestToken_AcceptsQueryParam(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	srv := httptest.NewServer(Token("secret", next))
+	srv := httptest.NewServer(Token("secret", nil, next))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "?token=secret")
@@ -40,7 +40,7 @@ func TestToken_AcceptsQueryParam(t *testing.T) {
 
 func TestToken_RejectsMissingAndWrong(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	srv := httptest.NewServer(Token("secret", next))
+	srv := httptest.NewServer(Token("secret", nil, next))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL)
@@ -59,6 +59,35 @@ func TestToken_RejectsMissingAndWrong(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("wrong token status = %d", resp.StatusCode)
+	}
+}
+
+func TestToken_ValidatorMode(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	valid := map[string]bool{"tok-1": true}
+	srv := httptest.NewServer(Token("", func(tok string) bool { return valid[tok] }, next))
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	req.Header.Set("Authorization", "Bearer tok-1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("valid token status = %d", resp.StatusCode)
+	}
+
+	req, _ = http.NewRequest("GET", srv.URL, nil)
+	req.Header.Set("Authorization", "Bearer tok-2")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("invalid token status = %d", resp.StatusCode)
 	}
 }
 

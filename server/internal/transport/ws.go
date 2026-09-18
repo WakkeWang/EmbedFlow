@@ -34,6 +34,9 @@ type AuthConfig struct {
 
 // Hub receives decoded transport events. The session executor implements it.
 type Hub interface {
+	// OnAuth fires once per connection after a successful handshake; the
+	// executor registers its per-connection state here.
+	OnAuth(c *ClientConn)
 	// OnControl receives every known control frame after auth.
 	OnControl(c *ClientConn, f *protocol.Frame)
 	// OnBinary receives serial byte-stream payloads (data frames).
@@ -193,6 +196,7 @@ func handshake(c *ClientConn, hub Hub, auth *AuthConfig) bool {
 	if err := c.Send(protocol.Frame{Type: protocol.FrameAuthOK, Body: &protocol.AuthOKFrame{ServerVersion: auth.ServerVersion}}); err != nil {
 		return false
 	}
+	hub.OnAuth(c)
 	return true
 }
 

@@ -151,6 +151,12 @@ func (l *Logger) flushLocked() error {
 
 var errBroken = fmt.Errorf("sessionlog: broken (write already failed)")
 
+// SessionFilePath is the exported log path for a session (used by the tail
+// handler and tests).
+func SessionFilePath(dataDir string, sessionID int64) string {
+	return paths.SessionLog(dataDir, sessionID)
+}
+
 // escape renders bytes printable-safely: printable ASCII passes through,
 // \r \n \t are kept readable, everything else becomes \xHH.
 func escape(data []byte) string {

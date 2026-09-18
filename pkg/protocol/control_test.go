@@ -65,3 +65,66 @@ func TestParseControl_HeartbeatRoundTrip(t *testing.T) {
 		t.Fatalf("seq = %d, want 7", h.Seq)
 	}
 }
+
+func TestParseControl_ExpectProgressRoundTrip(t *testing.T) {
+	wire, err := Encode(&ExpectProgressFrame{
+		SessionID: 3, StepIndex: 1, StepTotal: 5, StepDesc: "await Login:",
+		Phase: "running",
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	f, err := ParseControl(wire)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	p, ok := f.Body.(*ExpectProgressFrame)
+	if !ok {
+		t.Fatalf("body = %T, want *ExpectProgressFrame", f.Body)
+	}
+	if p.SessionID != 3 || p.StepIndex != 1 || p.StepTotal != 5 || p.Phase != "running" {
+		t.Fatalf("fields = %+v", p)
+	}
+}
+
+func TestParseControl_ConfirmRoundTrip(t *testing.T) {
+	wire, err := Encode(&ConfirmFrame{
+		SessionID: 3, ConfirmID: 8, Prompt: "LED on?", State: "pending",
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	f, err := ParseControl(wire)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	c, ok := f.Body.(*ConfirmFrame)
+	if !ok {
+		t.Fatalf("body = %T, want *ConfirmFrame", f.Body)
+	}
+	if c.ConfirmID != 8 || c.Prompt != "LED on?" || c.State != "pending" {
+		t.Fatalf("fields = %+v", c)
+	}
+}
+
+func TestParseControl_SessionStateOccupier(t *testing.T) {
+	// DS-2A: busy rejection carries occupier identity.
+	wire, err := Encode(&SessionStateFrame{
+		DeviceID: 2, State: "busy", Detail: "device busy",
+		OccupierUser: "bob", OccupierKind: "task", OccupierSince: "2026-09-18T10:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	f, err := ParseControl(wire)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	s, ok := f.Body.(*SessionStateFrame)
+	if !ok {
+		t.Fatalf("body = %T", f.Body)
+	}
+	if s.OccupierUser != "bob" || s.OccupierKind != "task" && s.OccupierKind != "" {
+		t.Fatalf("fields = %+v", s)
+	}
+}

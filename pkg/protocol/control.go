@@ -16,14 +16,16 @@ const ProtocolVersion = 1
 
 // Frame type numbers for control frames.
 const (
-	FrameAuth         uint16 = 1 // client -> server: authenticate
-	FrameAuthOK       uint16 = 2 // server -> client: auth accepted
-	FrameAuthFail     uint16 = 3 // server -> client: auth refused (reason in body)
-	FrameHeartbeat    uint16 = 4 // both ways: liveness ping
-	FrameShareRequest uint16 = 5 // client -> server: share a serial port
-	FrameDeviceStatus uint16 = 6 // client -> server: port open/close/error state
-	FrameSessionCtrl  uint16 = 7 // web -> server: session lifecycle commands
-	FrameSessionState uint16 = 8 // server -> clients: session state broadcast
+	FrameAuth           uint16 = 1  // client -> server: authenticate
+	FrameAuthOK         uint16 = 2  // server -> client: auth accepted
+	FrameAuthFail       uint16 = 3  // server -> client: auth refused (reason in body)
+	FrameHeartbeat      uint16 = 4  // both ways: liveness ping
+	FrameShareRequest   uint16 = 5  // client -> server: share a serial port
+	FrameDeviceStatus   uint16 = 6  // client -> server: port open/close/error state
+	FrameSessionCtrl    uint16 = 7  // web -> server: session lifecycle commands
+	FrameSessionState   uint16 = 8  // server -> clients: session state broadcast
+	FrameExpectProgress uint16 = 9  // server -> web: expect step progress (DS-3A)
+	FrameConfirm        uint16 = 10 // both ways: human confirmation card (issue #9)
 )
 
 // Envelope is the JSON shape of every control frame on the wire.
@@ -56,6 +58,7 @@ type AuthFrame struct {
 // so the client can warn on mismatch (issue #10).
 type AuthOKFrame struct {
 	ServerVersion string `json:"server_version,omitempty"`
+	Role          string `json:"role,omitempty"` // admin | member (requirement 1.5)
 }
 
 // AuthFailFrame rejects authentication or a version mismatch.
@@ -71,7 +74,8 @@ type HeartbeatFrame struct {
 // ShareRequestFrame asks the server to bind this client connection to a
 // registered device as its serial transport.
 type ShareRequestFrame struct {
-	DeviceID int64 `json:"device_id"`
+	DeviceID int64  `json:"device_id"`
+	Port     string `json:"port,omitempty"` // COM port name, for display
 }
 
 // DeviceStatusFrame reports the local serial port state on the client side.
@@ -81,31 +85,94 @@ type DeviceStatusFrame struct {
 	Error string `json:"error,omitempty"`
 }
 
-// SessionCtrlFrame carries browser-side session commands (open/close/abort...).
+// SessionCtrlFrame carries browser-side session commands.
+// Commands: open (device_id), close (session_id), follow (device_id,
+// read-only second viewer), abort (session_id, expect run), run
+// (device_id, rule_id -- creates a task session, CEO-17A).
 type SessionCtrlFrame struct {
 	Command   string `json:"command"`
 	SessionID int64  `json:"session_id,omitempty"`
 	DeviceID  int64  `json:"device_id,omitempty"`
+	RuleID    int64  `json:"rule_id,omitempty"`
 }
 
 // SessionStateFrame broadcasts session lifecycle state to subscribed browsers.
+// Occupier fields are set on busy-rejection for the DS-2A popup.
 type SessionStateFrame struct {
 	SessionID int64  `json:"session_id"`
 	DeviceID  int64  `json:"device_id"`
-	State     string `json:"state"`
+	State     string `json:"state"` // active | closed | failed | rejected | busy | idle_warning | readonly
+	Detail    string `json:"detail,omitempty"`
+	// Occupier identifies the current holder on busy-rejection (DS-2A).
+	OccupierUser  string `json:"occupier_user,omitempty"`
+	OccupierKind  string `json:"occupier_kind,omitempty"`
+	OccupierSince string `json:"occupier_since,omitempty"`
+	OwnerIsYou    bool   `json:"owner_is_you,omitempty"`
+}
+
+// ExpectProgressFrame reports expect run progress (issue #8, DS-3A):
+// current step index/total, the step description, and the phase.
+type ExpectProgressFrame struct {
+	SessionID int64  `json:"session_id"`
+	StepIndex int    `json:"step_index"`
+	StepTotal int    `json:"step_total"`
+	StepDesc  string `json:"step_desc,omitempty"`
+	Phase     string `json:"phase"` // running | completed | failed | aborted
 	Detail    string `json:"detail,omitempty"`
 }
 
-// bodyTypes maps frame type numbers to concrete body structs.
-var bodyTypes = map[uint16]func() any{
-	FrameAuth:         func() any { return new(AuthFrame) },
-	FrameAuthOK:       func() any { return new(AuthOKFrame) },
-	FrameAuthFail:     func() any { return new(AuthFailFrame) },
-	FrameHeartbeat:    func() any { return new(HeartbeatFrame) },
-	FrameShareRequest: func() any { return new(ShareRequestFrame) },
-	FrameDeviceStatus: func() any { return new(DeviceStatusFrame) },
-	FrameSessionCtrl:  func() any { return new(SessionCtrlFrame) },
-	FrameSessionState: func() any { return new(SessionStateFrame) },
+// ConfirmFrame is a human confirmation card (issue #9): LED observations and
+// cable unplugging recorded as first-class session steps. Cards never
+// auto-dismiss; resolution is explicit PASS/FAIL with an optional note.
+type ConfirmFrame struct {
+	SessionID int64  `json:"session_id"`
+	ConfirmID int64  `json:"confirm_id"`
+	Prompt    string `json:"prompt"`
+	State     string `json:"state"`            // pending | resolved
+	Result    string `json:"result,omitempty"` // pass | fail
+	Note      string `json:"note,omitempty"`
+}
+
+// frameDef binds a frame type to its concrete body constructor.
+type frameDef struct {
+	typ uint16
+	new func() any
+}
+
+// registry is the single source of truth for frame <-> type mapping; the
+// decode map and the encode reverse map are both derived from it.
+var registry = []frameDef{
+	{FrameAuth, func() any { return new(AuthFrame) }},
+	{FrameAuthOK, func() any { return new(AuthOKFrame) }},
+	{FrameAuthFail, func() any { return new(AuthFailFrame) }},
+	{FrameHeartbeat, func() any { return new(HeartbeatFrame) }},
+	{FrameShareRequest, func() any { return new(ShareRequestFrame) }},
+	{FrameDeviceStatus, func() any { return new(DeviceStatusFrame) }},
+	{FrameSessionCtrl, func() any { return new(SessionCtrlFrame) }},
+	{FrameSessionState, func() any { return new(SessionStateFrame) }},
+	{FrameExpectProgress, func() any { return new(ExpectProgressFrame) }},
+	{FrameConfirm, func() any { return new(ConfirmFrame) }},
+}
+
+var decodeByType = func() map[uint16]func() any {
+	m := make(map[uint16]func() any, len(registry))
+	for _, d := range registry {
+		m[d.typ] = d.new
+	}
+	return m
+}()
+
+var encodeByBody = func() map[string]uint16 {
+	m := make(map[string]uint16, len(registry))
+	for _, d := range registry {
+		m[frameBodyName(d.new())] = d.typ
+	}
+	return m
+}()
+
+func frameBodyName(v any) string {
+	// Pointer type name, e.g. "*protocol.AuthFrame".
+	return fmt.Sprintf("%T", v)
 }
 
 // ParseControl decodes a JSON text frame into a Frame.
@@ -119,7 +186,7 @@ func ParseControl(wire []byte) (*Frame, error) {
 	if env.Type == 0 {
 		return nil, fmt.Errorf("protocol: control frame missing type")
 	}
-	makeBody, known := bodyTypes[env.Type]
+	makeBody, known := decodeByType[env.Type]
 	if !known {
 		return &Frame{Type: env.Type, Body: &UnknownBody{Raw: env.Body}}, nil
 	}
@@ -134,25 +201,8 @@ func ParseControl(wire []byte) (*Frame, error) {
 
 // Encode marshals a body struct into wire bytes under its frame type.
 func Encode(body any) ([]byte, error) {
-	var typ uint16
-	switch body.(type) {
-	case *AuthFrame:
-		typ = FrameAuth
-	case *AuthOKFrame:
-		typ = FrameAuthOK
-	case *AuthFailFrame:
-		typ = FrameAuthFail
-	case *HeartbeatFrame:
-		typ = FrameHeartbeat
-	case *ShareRequestFrame:
-		typ = FrameShareRequest
-	case *DeviceStatusFrame:
-		typ = FrameDeviceStatus
-	case *SessionCtrlFrame:
-		typ = FrameSessionCtrl
-	case *SessionStateFrame:
-		typ = FrameSessionState
-	default:
+	typ, ok := encodeByBody[frameBodyName(body)]
+	if !ok {
 		return nil, fmt.Errorf("protocol: unencodable body %T", body)
 	}
 	raw, err := json.Marshal(body)
