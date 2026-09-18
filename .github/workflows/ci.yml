@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Build frontend (embedded)
+        run: cd web && npm ci && npm run build && cp -r dist/* ../server/internal/webui/dist/
+      - name: Test all modules
+        run: go test ./pkg/protocol/... ./server/... ./serial-client/...
+      - name: Vet
+        run: |
+          go vet ./pkg/protocol/... ./server/... ./serial-client/...
+      - name: Type-check frontend
+        run: cd web && npx vue-tsc --noEmit
+
+  cross-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Build frontend (embedded)
+        run: cd web && npm ci && npm run build && cp -r dist/* ../server/internal/webui/dist/
+      - name: Build server binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: go build -o embedflow-server-${{ matrix.goos }}-${{ matrix.goarch }} ./server/cmd/embedflow-server
+      - name: Build serial client (windows)
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: go build -o serial-client-windows-amd64.exe ./serial-client/cmd/serial-client
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            embedflow-server-*
+            serial-client-*
