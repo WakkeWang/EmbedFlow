@@ -37,7 +37,7 @@ func TestOpen_WALModeAndBusyTimeout(t *testing.T) {
 
 func TestCreateDevice_AndGet(t *testing.T) {
 	s := openTestStore(t)
-	id, err := s.CreateDevice(context.Background(), "d2000-lab-01", "yy0133")
+	id, err := s.CreateDevice(context.Background(), "board-lab-01", "demo")
 	if err != nil {
 		t.Fatalf("create device: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestCreateDevice_AndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get device: %v", err)
 	}
-	if dev.Name != "d2000-lab-01" || dev.Project != "yy0133" {
+	if dev.Name != "board-lab-01" || dev.Project != "demo" {
 		t.Fatalf("device = %+v", dev)
 	}
 }

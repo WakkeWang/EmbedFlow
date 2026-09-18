@@ -145,7 +145,7 @@ func stateOf(f *protocol.Frame) *protocol.SessionStateFrame {
 
 func TestFlow_ShareOpenBinaryClose(t *testing.T) {
 	s := newTestServer(t)
-	devID, err := s.st.CreateDevice(context.Background(), "d2000", "yy0133")
+	devID, err := s.st.CreateDevice(context.Background(), "board", "demo")
 	if err != nil {
 		t.Fatalf("seed device: %v", err)
 	}

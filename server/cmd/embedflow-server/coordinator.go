@@ -430,10 +430,23 @@ func (h *coordinator) runExpect(c *transport.ClientConn, deviceID, ruleID int64)
 		enginePort = vp
 	}
 
+	// writeTX appends a TX line: masked for secret sends (issue #14),
+	// escaped content otherwise.
+	writeTX := func(data []byte, secret bool) {
+		if secret {
+			_ = h.writeLogMasked(sid, "TX")
+		} else {
+			_ = h.writeLog(sid, "TX", data)
+		}
+	}
+
 	cfg := expect.Config{
 		Steps:         steps,
 		DefaultWait:   15 * time.Second,
 		DefaultOnFail: expect.FailAbort,
+		// TX logging goes through OnSendBytes so secret sends (issue #14)
+		// land masked while the device still receives real bytes.
+		OnSendBytes: writeTX,
 		// Live progress (issue #8, DS-3A): each step start pushes a running
 		// frame so the terminal UI's progress bar and abort button appear.
 		OnStep: func(index, total int) {
@@ -590,7 +603,14 @@ func (h *coordinator) OnBinary(c *transport.ClientConn, data []byte) {
 			return // an expect run owns the device input stream
 		}
 		h.kernel.UserInput(session.SessionID(st.sessionID), time.Now())
-		h.sendToDevice(st.sessionID, data)
+		// Manual TX logging (requirement 3.3: both directions with
+		// timestamps). The expect-run path logs its own sends through
+		// Config.OnSendBytes (secret-aware, issue #14); this is the
+		// keystroke path and it is never secret. Logged only when the bytes
+		// actually reached a byte sink: a TX line claims delivery.
+		if h.deliverToDevice(st.sessionID, data) {
+			_ = h.writeLog(st.sessionID, "TX", data)
+		}
 	}
 }
 
@@ -614,13 +634,31 @@ func (h *coordinator) writeLog(sessionID int64, dir sessionlog.Dir, data []byte)
 	return l.Write(time.Now(), dir, data)
 }
 
+// writeLogMasked appends a masked TX line (issue #14: password sends).
+func (h *coordinator) writeLogMasked(sessionID int64, dir sessionlog.Dir) error {
+	h.mu.Lock()
+	l := h.loggers[sessionID]
+	h.mu.Unlock()
+	if l == nil {
+		return nil
+	}
+	return l.WriteMasked(time.Now(), dir)
+}
+
 // sendToDevice pushes browser TX bytes to the serial client bound to the
 // session's device (requirement 3.4: pure passthrough); the virtual device
 // receives them directly (CEO-18A).
 func (h *coordinator) sendToDevice(sessionID int64, data []byte) {
+	_ = h.deliverToDevice(sessionID, data)
+}
+
+// deliverToDevice routes TX bytes to the device's transport and reports
+// whether they reached any byte sink. Callers log TX only on true: a TX log
+// line asserts delivery.
+func (h *coordinator) deliverToDevice(sessionID int64, data []byte) bool {
 	dev, ok := h.kernel.Session(session.SessionID(sessionID))
 	if !ok || dev.DeviceID == 0 {
-		return
+		return false
 	}
 	h.mu.Lock()
 	var target *transport.ClientConn
@@ -632,8 +670,8 @@ func (h *coordinator) sendToDevice(sessionID int64, data []byte) {
 	}
 	h.mu.Unlock()
 	if target != nil {
-		_ = target.SendBinary(data)
-		return
+		err := target.SendBinary(data)
+		return err == nil
 	}
 	// No physical client: the virtual device consumes the bytes.
 	h.mu.Lock()
@@ -641,8 +679,9 @@ func (h *coordinator) sendToDevice(sessionID int64, data []byte) {
 	h.mu.Unlock()
 	if vd != nil && vd.deviceID == int64(dev.DeviceID) {
 		vd.deliver(data)
-		_ = h.writeLog(sessionID, "TX", data)
+		return true
 	}
+	return false
 }
 
 // OnClose tears down the connection: unbind, end owned session per kind
@@ -723,7 +762,9 @@ func (h *coordinator) apply(ev session.Event) {
 		// Flush, close, flag incomplete (design doc disk-full gap).
 		h.closeLogger(int64(ev.SessionID))
 
-		// Drop the virtual port for this session (demo runs).
+		// Drop the virtual port for this session (demo runs) and the shared
+		// transport bridge -- it holds a dead client connection reference,
+		// so leaving it would leak one entry per task session.
 		h.mu.Lock()
 		kept := h.virtualPorts[:0]
 		for _, p := range h.virtualPorts {
@@ -733,6 +774,7 @@ func (h *coordinator) apply(ev session.Event) {
 		}
 		h.virtualPorts = kept
 		delete(h.virtualSession, int64(ev.DeviceID))
+		delete(h.sharedBySession, int64(ev.SessionID))
 		h.mu.Unlock()
 
 		// Notify subscribers on the session's device.

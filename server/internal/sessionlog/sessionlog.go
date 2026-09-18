@@ -76,12 +76,23 @@ func (l *Logger) flushLoop() {
 // Write appends one chunk of session data as a log line. Binary input is
 // escaped printable-safely; the log is always valid text.
 func (l *Logger) Write(ts time.Time, dir Dir, data []byte) error {
+	return l.writeLine(ts, dir, escape(data))
+}
+
+// WriteMasked appends a TX line whose content is replaced by a fixed mask
+// (issue #14): passwords crossing the serial link never reach the log in
+// plaintext. Display and download share the same file, so both are masked.
+func (l *Logger) WriteMasked(ts time.Time, dir Dir) error {
+	return l.writeLine(ts, dir, "***")
+}
+
+func (l *Logger) writeLine(ts time.Time, dir Dir, content string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.broken {
 		return errBroken
 	}
-	line := fmt.Sprintf("%s %s | %s\n", ts.Format("2006-01-02 15:04:05.000"), dir, escape(data))
+	line := fmt.Sprintf("%s %s | %s\n", ts.Format("2006-01-02 15:04:05.000"), dir, content)
 	if _, err := l.buf.WriteString(line); err != nil {
 		l.broken = true
 		return fmt.Errorf("sessionlog: buffer: %w", err)

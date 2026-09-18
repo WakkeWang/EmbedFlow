@@ -56,6 +56,9 @@ type Step struct {
 	MaxRetries int `json:"max_retries,omitempty"`
 	// Delay makes this a delay step: wait this long, matching nothing.
 	Delay time.Duration `json:"delay,omitempty"`
+	// Secret marks the send content as a password (issue #14): the device
+	// still receives the real bytes, but the TX log line is fully masked.
+	Secret bool `json:"secret,omitempty"`
 }
 
 // Config drives one Run.
@@ -66,6 +69,11 @@ type Config struct {
 	// OnStep, when set, fires as each step starts: (index, total). Live
 	// progress for the terminal UI (issue #8, DS-3A).
 	OnStep func(index, total int)
+	// OnSendBytes, when set, fires for every write the engine makes:
+	// (bytes, secret). The executor logs TX through it so secret sends land
+	// masked in the session log while the device still gets real bytes
+	// (issue #14).
+	OnSendBytes func(data []byte, secret bool)
 }
 
 // Result reports how the sequence ended.
@@ -185,7 +193,16 @@ func (r *Runner) exec() *Result {
 	return &Result{StepIndex: len(r.cfg.Steps) - 1, Detail: "completed"}
 }
 
-// send writes the step's decoded send content to the port.
+// onSendBytes notifies the executor of an engine write (TX log hook).
+func (r *Runner) onSendBytes(step *Step, data []byte) {
+	if r.cfg.OnSendBytes != nil {
+		r.cfg.OnSendBytes(data, step.Secret)
+	}
+}
+
+// send writes the step's decoded send content to the port. The TX log hook
+// fires only after a successful write: a log line claims the device
+// received the bytes, so a failed write must not produce one.
 func (r *Runner) send(stepIdx int, step *Step) *Result {
 	data, err := EncodeSend(step.Send)
 	if err != nil {
@@ -194,6 +211,7 @@ func (r *Runner) send(stepIdx int, step *Step) *Result {
 	if _, err := r.port.Write(data); err != nil {
 		return &Result{StepIndex: stepIdx, Detail: fmt.Sprintf("send: %v", err)}
 	}
+	r.onSendBytes(step, data)
 	return nil
 }
 

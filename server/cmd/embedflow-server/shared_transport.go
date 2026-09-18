@@ -73,9 +73,10 @@ func (s *sharedTransport) Read(p []byte) (int, error) {
 	}
 }
 
-// Write sends TX bytes to the serial client and logs them.
+// Write sends TX bytes to the serial client. Logging is the engine's job
+// (Config.OnSendBytes: secret sends land masked, issue #14); manual
+// keystrokes log in sendToDevice.
 func (s *sharedTransport) Write(p []byte) (int, error) {
-	_ = s.hub.writeLog(s.sid, "TX", p)
 	_ = s.client.SendBinary(append([]byte(nil), p...))
 	return len(p), nil
 }

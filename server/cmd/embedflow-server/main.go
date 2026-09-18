@@ -31,13 +31,19 @@ var version = "dev"
 
 func main() {
 	var (
-		addr = flag.String("addr", ":8420", "listen address")
-		data = flag.String("data", "", "data directory (default ./data)")
-		demo = flag.Bool("demo", false, "run with the built-in virtual device (CEO-18A)")
+		addr      = flag.String("addr", ":8420", "listen address")
+		data      = flag.String("data", "", "data directory (default ./data)")
+		demo      = flag.Bool("demo", false, "run with the built-in virtual device (CEO-18A)")
+		probeEcho = flag.Bool("probe-echo", false, "latency-probe mode (issue #2): echo every client binary frame back unchanged, no store, no sessions")
 	)
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	if *probeEcho {
+		runProbeEcho(*addr)
+		return
+	}
 
 	dataDir := *data
 	if dataDir == "" {

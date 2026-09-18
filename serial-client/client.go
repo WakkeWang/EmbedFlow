@@ -43,7 +43,7 @@ type Client struct {
 	done      sync.WaitGroup
 }
 
-// New creates a client pointed at a server (e.g. http://192.168.0.80:8420).
+// New creates a client pointed at a server (e.g. http://<server>:8420).
 func New(serverURL, token string) *Client {
 	return &Client{
 		serverURL: strings.TrimRight(serverURL, "/"),
@@ -225,6 +225,14 @@ func (c *Client) SetPort(p PortOpener) {
 	c.SetLocalPort(p)
 	c.done.Add(1)
 	go c.portToServer(p)
+}
+
+// SetLocalPortOnly stores the port reference without starting the
+// passthrough pump (latency probe: the probe reads the port itself, and two
+// concurrent readers on a real COM port would steal each other's bytes --
+// skewed numbers with no error, the worst outcome for a measurement tool).
+func (c *Client) SetLocalPortOnly(p PortOpener) {
+	c.SetLocalPort(p)
 }
 
 // portToServer pumps local port bytes to the server (binary data frames).

@@ -35,9 +35,10 @@ func (p *virtualPort) Read(b []byte) (int, error) {
 	}
 }
 
-// Write delivers operator bytes into the device and logs them (TX).
+// Write delivers operator bytes into the device. Logging is the caller's
+// job: the expect engine routes TX through Config.OnSendBytes (so secret
+// sends land masked, issue #14), and manual keystrokes log in sendToDevice.
 func (p *virtualPort) Write(b []byte) (int, error) {
-	_ = p.hub.writeLog(p.sid, "TX", b)
 	p.dev.deliver(b)
 	return len(b), nil
 }

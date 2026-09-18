@@ -52,14 +52,14 @@ func TestDevices_ListAndDelete(t *testing.T) {
 	s := openTestStore2(t)
 	ctx := context.Background()
 
-	id1, _ := s.CreateDevice(ctx, "d2000-lab", "yy0133")
-	id2, _ := s.CreateDevice(ctx, "d2000-rack", "yy0133")
+	id1, _ := s.CreateDevice(ctx, "board-lab", "demo")
+	id2, _ := s.CreateDevice(ctx, "board-rack", "demo")
 
 	devs, err := s.ListDevices(ctx)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(devs) != 2 || devs[0].Name != "d2000-lab" || devs[1].Name != "d2000-rack" {
+	if len(devs) != 2 || devs[0].Name != "board-lab" || devs[1].Name != "board-rack" {
 		t.Fatalf("devices = %+v", devs)
 	}
 	_ = id1
@@ -78,7 +78,7 @@ func TestExpectRules_CRUD(t *testing.T) {
 	s := openTestStore2(t)
 	ctx := context.Background()
 
-	id, err := s.CreateExpectRule(ctx, "yy0133-flash", `[{"await":"Login:","send":"root\r"}]`)
+	id, err := s.CreateExpectRule(ctx, "demo-flash-cfg", `[{"await":"Login:","send":"root\r"}]`)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestExpectRules_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.Name != "yy0133-flash" || got.StepsJSON == "" {
+	if got.Name != "demo-flash-cfg" || got.StepsJSON == "" {
 		t.Fatalf("rule = %+v", got)
 	}
 

@@ -29,7 +29,7 @@ func TestEngine_Regex_Match(t *testing.T) {
 		{Await: `IP: \d+\.\d+`, Match: MatchRegex},
 	})
 	dev.script([]scriptLine{
-		{after: 5 * time.Millisecond, data: "IP: 192.168.0.80"},
+		{after: 5 * time.Millisecond, data: "IP: 203.0.113.10"},
 	})
 	res := runner.run()
 	res.wantOK(t)
@@ -70,7 +70,7 @@ func TestEngine_SendBetweenAwaits(t *testing.T) {
 	dev.script([]scriptLine{
 		{after: 5 * time.Millisecond, data: "Login:"},
 		{thenExpect: "root\r", data: "Password:"},
-		{thenExpect: "secret\r", data: "D2000#"},
+		{thenExpect: "secret\r", data: "#"},
 	})
 	res := runner.run()
 	res.wantOK(t)
@@ -206,6 +206,55 @@ func TestEncode_PlainTextPassthrough(t *testing.T) {
 	}
 	if string(got) != "plain text 123" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// --- secret sends (issue #14) ---
+
+func TestEngine_SecretSend_HooksWithFlag(t *testing.T) {
+	var gotBytes []byte
+	var gotSecret bool
+	runner, dev := newFixture(t, []Step{
+		{Await: "Password:"},
+		{Send: "s3cret\r", Secret: true},
+		{Await: "#"},
+	})
+	// Re-wire the fixture's OnSendBytes before running.
+	runner.cfg.OnSendBytes = func(data []byte, secret bool) {
+		gotBytes = append(gotBytes, data...)
+		gotSecret = gotSecret || secret
+	}
+	dev.script([]scriptLine{
+		{after: 5 * time.Millisecond, data: "Password:"},
+		{thenExpect: "s3cret\r", data: "#"},
+	})
+	res := runner.run()
+	res.wantOK(t)
+	// The hook saw the real bytes AND the secret flag; the port write is
+	// unaffected (device got the password -- verified by thenExpect).
+	if string(gotBytes) != "s3cret\r" {
+		t.Fatalf("hook bytes = %q", gotBytes)
+	}
+	if !gotSecret {
+		t.Fatal("hook did not report secret=true")
+	}
+}
+
+func TestEngine_PlainSend_HookNotSecret(t *testing.T) {
+	var gotSecret bool
+	runner, dev := newFixture(t, []Step{
+		{Await: "Login:"},
+		{Send: "root\r"},
+	})
+	runner.cfg.OnSendBytes = func(_ []byte, secret bool) { gotSecret = gotSecret || secret }
+	dev.script([]scriptLine{
+		{after: 5 * time.Millisecond, data: "Login:"},
+		{thenExpect: "root\r", data: "#"},
+	})
+	res := runner.run()
+	res.wantOK(t)
+	if gotSecret {
+		t.Fatal("plain send reported secret=true")
 	}
 }
 
