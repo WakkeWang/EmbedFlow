@@ -9,6 +9,7 @@ import (
 
 	"github.com/WakkeWang/EmbedFlow/pkg/protocol"
 	"github.com/WakkeWang/EmbedFlow/server/internal/session"
+	"github.com/WakkeWang/EmbedFlow/server/internal/sessionlog"
 	"github.com/WakkeWang/EmbedFlow/server/internal/store"
 	"github.com/WakkeWang/EmbedFlow/server/internal/transport"
 )
@@ -16,14 +17,17 @@ import (
 var errAuthFailed = errors.New("invalid token")
 
 // coordinator is the M1 session executor: it implements transport.Hub,
-// translating kernel events into persistence and wire side effects. T1 scope
-// keeps it minimal: bootstrap auth stub, connection registry, session state.
+// translating kernel events into persistence, session logs and wire side
+// effects. T1+T2 scope: bootstrap auth stub, connection registry, session
+// state, byte-accurate session logs.
 type coordinator struct {
-	kernel *session.Kernel
-	store  *store.Store
+	kernel  *session.Kernel
+	store   *store.Store
+	dataDir string
 
-	mu    sync.Mutex
-	conns map[*transport.ClientConn]struct{}
+	mu      sync.Mutex
+	conns   map[*transport.ClientConn]struct{}
+	loggers map[int64]*sessionlog.Logger // session ID -> open log writer
 }
 
 func (h *coordinator) validateToken(token string) (string, error) {
@@ -58,6 +62,11 @@ func (h *coordinator) OnControl(c *transport.ClientConn, f *protocol.Frame) {
 			}})
 			return
 		}
+		// Open a session log writer for the new session (T2). Failure marks
+		// the session log-incomplete from birth -- loud, not silent.
+		if err := h.openLogger(int64(res.SessionID)); err != nil {
+			slog.Error("open session log", "session", res.SessionID, "err", err)
+		}
 		_ = c.Send(protocol.Frame{Type: protocol.FrameSessionState, Body: &protocol.SessionStateFrame{
 			SessionID: int64(res.SessionID),
 			DeviceID:  body.DeviceID,
@@ -69,8 +78,54 @@ func (h *coordinator) OnControl(c *transport.ClientConn, f *protocol.Frame) {
 }
 
 func (h *coordinator) OnBinary(c *transport.ClientConn, data []byte) {
-	// T1 skeleton: no device binding yet, so binary payload is dropped.
-	// T3/T4 route it through the session log and back out to subscribers.
+	// T2: byte-accurate log capture. RX direction: bytes arriving from the
+	// serial client. Subscribable fan-out to browsers arrives with T5.
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for id, l := range h.loggers {
+		if err := l.Write(time.Now(), sessionlog.DirRX, data); err != nil {
+			slog.Error("session log write failed", "session", id, "err", err)
+		}
+		if l.Incomplete() {
+			// Surface once per logger; the WS alert rides T5's subscribe path.
+			slog.Warn("session log incomplete (write failure)", "session", id)
+		}
+	}
+}
+
+// openLogger starts (or replaces) the log writer for a session.
+func (h *coordinator) openLogger(sessionID int64) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, ok := h.loggers[sessionID]; ok {
+		return nil
+	}
+	l, err := sessionlog.Open(h.dataDir, sessionID)
+	if err != nil {
+		return err
+	}
+	h.loggers[sessionID] = l
+	return nil
+}
+
+// closeLogger flushes, closes and forgets a session's log writer.
+func (h *coordinator) closeLogger(sessionID int64) {
+	h.mu.Lock()
+	l, ok := h.loggers[sessionID]
+	delete(h.loggers, sessionID)
+	h.mu.Unlock()
+	if ok && l != nil {
+		if err := l.Close(); err != nil {
+			slog.Error("close session log", "session", sessionID, "err", err)
+		}
+	}
+}
+
+// loggerFor returns the open logger for a session, if any.
+func (h *coordinator) loggerFor(sessionID int64) *sessionlog.Logger {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.loggers[sessionID]
 }
 
 func (h *coordinator) OnHeartbeat(c *transport.ClientConn, seq uint64) {
@@ -145,6 +200,8 @@ func (h *coordinator) apply(ev session.Event) {
 		}); err != nil {
 			slog.Error("persist session end", "session", ev.SessionID, "err", err)
 		}
+		// Flush and release the session's log writer (T2).
+		h.closeLogger(int64(ev.SessionID))
 		slog.Info("session ended", "session", ev.SessionID, "state", s.State, "reason", s.EndReason)
 	case session.EventConnDown:
 		slog.Warn("client connection down (detection)", "session", ev.SessionID)

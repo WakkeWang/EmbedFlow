@@ -1,6 +1,7 @@
-// Command embedflow-server is the EmbedFlow server binary. T1 scope: the
-// session-layer skeleton -- store + session kernel + WebSocket transport,
-// wired together with the startup sweep (CEO-7A) and a liveness tick loop.
+// Command embedflow-server is the EmbedFlow server binary. T1+T2 scope: the
+// session-layer skeleton -- store + session kernel + WebSocket transport +
+// session logs, wired together with the startup sweep (CEO-7A), the standard
+// data layout (CEO-10A) and a liveness tick loop.
 package main
 
 import (
@@ -13,7 +14,9 @@ import (
 	"time"
 
 	"github.com/WakkeWang/EmbedFlow/pkg/protocol"
+	"github.com/WakkeWang/EmbedFlow/server/internal/paths"
 	"github.com/WakkeWang/EmbedFlow/server/internal/session"
+	"github.com/WakkeWang/EmbedFlow/server/internal/sessionlog"
 	"github.com/WakkeWang/EmbedFlow/server/internal/store"
 	"github.com/WakkeWang/EmbedFlow/server/internal/transport"
 )
@@ -33,8 +36,8 @@ func main() {
 	if dataDir == "" {
 		dataDir = "data"
 	}
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		slog.Error("create data dir", "err", err)
+	if err := paths.Ensure(dataDir); err != nil {
+		slog.Error("create data dir layout", "err", err)
 		os.Exit(1)
 	}
 
@@ -48,9 +51,11 @@ func main() {
 	kernel := session.New(session.Options{IdleTimeout: session.IdleTimeoutDefault})
 
 	hub := &coordinator{
-		kernel: kernel,
-		store:  st,
-		conns:  map[*transport.ClientConn]struct{}{},
+		kernel:  kernel,
+		store:   st,
+		dataDir: dataDir,
+		conns:   map[*transport.ClientConn]struct{}{},
+		loggers: map[int64]*sessionlog.Logger{},
 	}
 
 	// Startup sweep (CEO-7A): any session left "active" in the DB by a
@@ -77,6 +82,7 @@ func main() {
 		ProtocolVersion: protocol.ProtocolVersion,
 		ServerVersion:   version,
 	}))
+	mux.Handle("/api/sessions/", sessionlog.DownloadHandler(dataDir))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
