@@ -61,9 +61,7 @@ func runProbeEchoHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		switch typ {
 		case websocket.MessageBinary:
-			wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = ws.Write(wctx, websocket.MessageBinary, data)
-			wcancel()
+			writeProbe(ws, websocket.MessageBinary, data)
 		case websocket.MessageText:
 			f, err := protocol.ParseControl(data)
 			if err != nil {
@@ -71,16 +69,20 @@ func runProbeEchoHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			switch body := f.Body.(type) {
 			case *protocol.AuthFrame:
-				wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_ = ws.Write(wctx, websocket.MessageText, mustEncodeWire(&protocol.AuthOKFrame{}))
-				wcancel()
+				writeProbe(ws, websocket.MessageText, mustEncodeWire(&protocol.AuthOKFrame{}))
 			case *protocol.HeartbeatFrame:
-				wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_ = ws.Write(wctx, websocket.MessageText, mustEncodeWire(body))
-				wcancel()
+				writeProbe(ws, websocket.MessageText, mustEncodeWire(body))
 			}
 		}
 	}
+}
+
+// writeProbe sends one frame with the probe's bounded write timeout; a peer
+// that stops reading cannot pin the goroutine past 5s.
+func writeProbe(ws *websocket.Conn, typ websocket.MessageType, data []byte) {
+	wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer wcancel()
+	_ = ws.Write(wctx, typ, data)
 }
 
 func mustEncodeWire(body any) []byte {

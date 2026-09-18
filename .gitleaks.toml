@@ -3,10 +3,18 @@
 # real local paths, product-line identifiers that must not ship when the repo
 # goes public (issue #13, decision 17A). Credentials alone were never the
 # whole exposure.
+#
+# The pattern literals below necessarily contain the strings they match (a
+# rule for "yy0133" must spell yy0133), so this file is allowlisted --
+# gitleaks skips paths matched by the global allowlist.
 title = "EmbedFlow internal-info rules"
 
 [extend]
 useDefault = true
+
+[allowlist]
+description = "Rule definitions must spell the patterns they match"
+paths = ['''\.gitleaks\.toml$''']
 
 [[rules]]
 id = "embedflow-internal-ip"

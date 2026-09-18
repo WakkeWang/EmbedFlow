@@ -795,28 +795,25 @@ func (h *coordinator) apply(ev session.Event) {
 		slog.Info("session ended", "session", ev.SessionID, "state", s.State, "reason", s.EndReason)
 	case session.EventConnDown:
 		slog.Warn("client connection down (detection)", "session", ev.SessionID)
-		h.notifySession(int64(ev.SessionID), protocol.Frame{Type: protocol.FrameSessionState, Body: &protocol.SessionStateFrame{
-			SessionID: int64(ev.SessionID),
-			DeviceID:  int64(ev.DeviceID),
-			State:     "conn_down",
-			Detail:    ev.Detail,
-		}})
+		h.notifyConnState(ev, "conn_down", ev.Detail)
 	case session.EventConnWarning:
 		slog.Warn("task session in reconnect grace window", "session", ev.SessionID, "remaining", ev.Detail)
-		h.notifySession(int64(ev.SessionID), protocol.Frame{Type: protocol.FrameSessionState, Body: &protocol.SessionStateFrame{
-			SessionID: int64(ev.SessionID),
-			DeviceID:  int64(ev.DeviceID),
-			State:     "conn_warning",
-			Detail:    ev.Detail,
-		}})
+		h.notifyConnState(ev, "conn_warning", ev.Detail)
 	case session.EventConnRecovered:
 		slog.Info("client connection recovered within grace window", "session", ev.SessionID)
-		h.notifySession(int64(ev.SessionID), protocol.Frame{Type: protocol.FrameSessionState, Body: &protocol.SessionStateFrame{
-			SessionID: int64(ev.SessionID),
-			DeviceID:  int64(ev.DeviceID),
-			State:     "conn_recovered",
-		}})
+		h.notifyConnState(ev, "conn_recovered", "")
 	}
+}
+
+// notifyConnState broadcasts a liveness transition to the session's
+// subscribers: one shape for conn_down / conn_warning / conn_recovered.
+func (h *coordinator) notifyConnState(ev session.Event, state, detail string) {
+	h.notifySession(int64(ev.SessionID), protocol.Frame{Type: protocol.FrameSessionState, Body: &protocol.SessionStateFrame{
+		SessionID: int64(ev.SessionID),
+		DeviceID:  int64(ev.DeviceID),
+		State:     state,
+		Detail:    detail,
+	}})
 }
 
 // notifyDevice pushes a state frame to all connections bound to a device.

@@ -66,27 +66,26 @@ function closeEditor() {
 	current.value = null
 }
 
-async function deleteRule() {
-	if (!current.value?.id) return
+async function deleteRuleById(id?: number) {
+	if (!id) return
 	try {
-		await ruleApi.remove(current.value.id)
-		rules.value = rules.value.filter((r) => r.id !== current.value?.id)
-		current.value = null
+		await ruleApi.remove(id)
+		rules.value = rules.value.filter((r) => r.id !== id)
+		if (current.value?.id === id) {
+			current.value = null
+		}
 		message.success(t('expect.delete'))
 	} catch (e) {
 		message.error(String(e))
 	}
 }
 
-async function deleteRuleFromList(r: RuleVM) {
-	if (!r.id) return
-	try {
-		await ruleApi.remove(r.id)
-		rules.value = rules.value.filter((x) => x.id !== r.id)
-		message.success(t('expect.delete'))
-	} catch (e) {
-		message.error(String(e))
-	}
+function deleteRule() {
+	deleteRuleById(current.value?.id)
+}
+
+function deleteRuleFromList(r: RuleVM) {
+	deleteRuleById(r.id)
 }
 
 async function save() {
@@ -153,10 +152,6 @@ const matchOptions = computed(() => [
 	{ label: t('expect.matchRegex'), value: 'regex' },
 	{ label: t('expect.matchExact'), value: 'exact' },
 ])
-
-// The retry-count checkbox is display-only (retry selected = count active);
-// the real value rides s.max_retries.
-const useMaxRetries = ref(true)
 
 // Control-character insertion (issue #7): the operator never hand-types
 // escapes; buttons append to the send input via the model.
@@ -268,9 +263,6 @@ function appendSend(i: number, esc: string) {
 					<label>{{ t('expect.onFail') }}</label>
 					<div class="ctrl-row">
 						<NSelect v-model:value="s.on_fail" :options="onFailOptions" style="width: 160px" size="small" clearable />
-						<NCheckbox v-if="s.on_fail === 'retry'" v-model:checked="useMaxRetries" size="small" disabled>
-							{{ t('expect.retry') }}
-						</NCheckbox>
 						<NInputNumber
 							v-if="s.on_fail === 'retry'"
 							v-model:value="s.max_retries"

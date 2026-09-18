@@ -208,13 +208,26 @@ func printSamples(label string, samples []time.Duration, timedOut int) {
 		return
 	}
 	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
+	p50, p90, p99 := percentile(samples, 0.50), percentile(samples, 0.90), percentile(samples, 0.99)
+	printStats(len(samples), timedOut, p50, p90, p99, samples[len(samples)-1], 0)
+}
+
+func printResult(label string, res *client.LatencyResult) {
+	printStats(res.N, res.TimedOut, res.P50, res.P90, res.P99, res.Max, res.Mean)
+}
+
+// printStats renders one summary table; the two probe modes share the shape.
+func printStats(samples, timedOut int, p50, p90, p99, max, mean time.Duration) {
 	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	fmt.Fprintf(w, "samples\t%d\n", len(samples))
+	fmt.Fprintf(w, "samples\t%d\n", samples)
 	fmt.Fprintf(w, "timed out\t%d\n", timedOut)
-	fmt.Fprintf(w, "p50\t%s\n", percentile(samples, 0.50))
-	fmt.Fprintf(w, "p90\t%s\n", percentile(samples, 0.90))
-	fmt.Fprintf(w, "p99\t%s\n", percentile(samples, 0.99))
-	fmt.Fprintf(w, "max\t%s\n", samples[len(samples)-1])
+	fmt.Fprintf(w, "p50\t%s\n", p50)
+	fmt.Fprintf(w, "p90\t%s\n", p90)
+	fmt.Fprintf(w, "p99\t%s\n", p99)
+	fmt.Fprintf(w, "max\t%s\n", max)
+	if mean > 0 {
+		fmt.Fprintf(w, "mean\t%s\n", mean)
+	}
 	_ = w.Flush()
 }
 
@@ -230,16 +243,4 @@ func percentile(sorted []time.Duration, q float64) time.Duration {
 		idx = len(sorted) - 1
 	}
 	return sorted[idx]
-}
-
-func printResult(label string, res *client.LatencyResult) {
-	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	fmt.Fprintf(w, "samples\t%d\n", res.N)
-	fmt.Fprintf(w, "timed out\t%d\n", res.TimedOut)
-	fmt.Fprintf(w, "p50\t%s\n", res.P50)
-	fmt.Fprintf(w, "p90\t%s\n", res.P90)
-	fmt.Fprintf(w, "p99\t%s\n", res.P99)
-	fmt.Fprintf(w, "max\t%s\n", res.Max)
-	fmt.Fprintf(w, "mean\t%s\n", res.Mean)
-	_ = w.Flush()
 }

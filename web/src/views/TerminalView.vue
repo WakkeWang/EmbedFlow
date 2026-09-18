@@ -92,11 +92,11 @@ onMounted(async () => {
 				} else if (st.state === 'conn_warning') {
 					// Serial-client connection lost; task session survives the
 					// grace window (CEO-16A). Show the countdown detail.
-					term?.write(`\r\n[serial link down, reconnect window: ${st.detail ?? ''}]\r\n`)
+					term?.write(`\r\n[${t('terminal.serialLinkDown', { n: st.detail ?? '' })}]\r\n`)
 				} else if (st.state === 'conn_down') {
-					term?.write(`\r\n[serial link down: ${st.detail ?? ''}]\r\n`)
+					term?.write(`\r\n[${t('terminal.serialLinkDown', { n: st.detail ?? '' })}]\r\n`)
 				} else if (st.state === 'conn_recovered') {
-					term?.write(`\r\n[serial link recovered]\r\n`)
+					term?.write(`\r\n[${t('terminal.serialLinkRecovered')}]\r\n`)
 				} else if (st.state === 'closed' || st.state === 'failed') {
 					term?.write(`\r\n[session ${st.state}: ${st.detail ?? ''}]\r\n`)
 				}
