@@ -2,6 +2,20 @@
 
 中小嵌入式团队的内部构建/测试/发布系统，开源。需求文档见 `docs/需求文档.md`，术语表见 `CONTEXT.md`，设计文档见 `docs/designs/office-hours-design.md`。
 
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles use their default label strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout: root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
+
 ## 输出注意
 
 - 向用户提问（AskUserQuestion）时，**问题文本和选项只用中文、英文、数字、半角括号 () 和半角标点**。禁用全角括号（）、「」『』、箭头 →、带圈数字 ①②③、省略号 …… 等一切特殊 Unicode 符号——用户终端对这些字符渲染会出现乱码。列表用 1234 或 a)b)c) 编号。
