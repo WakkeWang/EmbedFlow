@@ -2,3 +2,6 @@
 .claude/
 
 .gstack/
+
+# 内部真实值对照（密码/IP/路径），只留本地，绝不入库
+docs/local/
