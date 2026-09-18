@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/WakkeWang/EmbedFlow/pkg/protocol"
+	"github.com/WakkeWang/EmbedFlow/server/internal/authmw"
 	"github.com/WakkeWang/EmbedFlow/server/internal/paths"
 	"github.com/WakkeWang/EmbedFlow/server/internal/session"
 	"github.com/WakkeWang/EmbedFlow/server/internal/sessionlog"
@@ -76,13 +77,17 @@ func main() {
 	}()
 	defer ticker.Stop()
 
+	// M1 bootstrap token: gates the API (log downloads) until the real
+	// login slice replaces the validator inside authmw.
+	bootstrapToken := "bootstrap"
+
 	mux := http.NewServeMux()
-	mux.Handle("/ws/client", transport.Handler(hub, &transport.AuthConfig{
+	mux.Handle("/ws/client", authmw.SameOrigin(transport.Handler(hub, &transport.AuthConfig{
 		ValidateToken:   hub.validateToken,
 		ProtocolVersion: protocol.ProtocolVersion,
 		ServerVersion:   version,
-	}))
-	mux.Handle("/api/sessions/", sessionlog.DownloadHandler(dataDir))
+	})))
+	mux.Handle("/api/sessions/", authmw.Token(bootstrapToken, sessionlog.DownloadHandler(dataDir)))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")

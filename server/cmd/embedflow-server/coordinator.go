@@ -78,18 +78,15 @@ func (h *coordinator) OnControl(c *transport.ClientConn, f *protocol.Frame) {
 }
 
 func (h *coordinator) OnBinary(c *transport.ClientConn, data []byte) {
-	// T2: byte-accurate log capture. RX direction: bytes arriving from the
-	// serial client. Subscribable fan-out to browsers arrives with T5.
+	// T2 interim: connection-to-session binding arrives with T5. Until then
+	// binary frames CANNOT be attributed to a session, so they are counted
+	// and dropped -- writing them to every open logger would cross-contaminate
+	// concurrent sessions (device A's bytes landing in device B's log).
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	for id, l := range h.loggers {
-		if err := l.Write(time.Now(), sessionlog.DirRX, data); err != nil {
-			slog.Error("session log write failed", "session", id, "err", err)
-		}
-		if l.Incomplete() {
-			// Surface once per logger; the WS alert rides T5's subscribe path.
-			slog.Warn("session log incomplete (write failure)", "session", id)
-		}
+	_, tracked := h.conns[c]
+	h.mu.Unlock()
+	if !tracked {
+		return
 	}
 }
 
@@ -108,7 +105,9 @@ func (h *coordinator) openLogger(sessionID int64) error {
 	return nil
 }
 
-// closeLogger flushes, closes and forgets a session's log writer.
+// closeLogger flushes, closes and forgets a session's log writer, marking
+// the session record when the log turned out incomplete (design doc Failure
+// modes: the disk-full gap -- the flag must outlive the logger).
 func (h *coordinator) closeLogger(sessionID int64) {
 	h.mu.Lock()
 	l, ok := h.loggers[sessionID]
@@ -117,6 +116,12 @@ func (h *coordinator) closeLogger(sessionID int64) {
 	if ok && l != nil {
 		if err := l.Close(); err != nil {
 			slog.Error("close session log", "session", sessionID, "err", err)
+		}
+		if l.Incomplete() {
+			if err := h.store.MarkLogIncomplete(context.Background(), sessionID); err != nil {
+				slog.Error("mark log incomplete", "session", sessionID, "err", err)
+			}
+			slog.Warn("session log incomplete (write failures during session)", "session", sessionID)
 		}
 	}
 }

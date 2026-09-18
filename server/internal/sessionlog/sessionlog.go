@@ -31,16 +31,22 @@ const (
 	flushInterval = 200 * time.Millisecond
 )
 
-// Logger writes one session's log file.
+// Logger writes one session's log file. Flushes are dual-triggered per
+// decision 8A: quantity (64KB buffer threshold) and time (a 200ms ticker),
+// so a silent session's data still reaches disk promptly.
 type Logger struct {
 	mu     sync.Mutex
 	file   *os.File
 	buf    *bufio.Writer
 	wrote  bool
 	broken bool // a write failed: session is "log incomplete"
+
+	ticker *time.Ticker
+	done   chan struct{}
 }
 
-// Open creates/opens the log file for a session under the data directory.
+// Open creates/opens the log file for a session under the data directory
+// and starts the periodic flush loop (decision 8A: time-based refresh).
 func Open(dataDir string, sessionID int64) (*Logger, error) {
 	if err := os.MkdirAll(paths.SessionDir(dataDir, sessionID), 0o755); err != nil {
 		return nil, fmt.Errorf("sessionlog: mkdir: %w", err)
@@ -49,7 +55,22 @@ func Open(dataDir string, sessionID int64) (*Logger, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sessionlog: open: %w", err)
 	}
-	return &Logger{file: f, buf: bufio.NewWriterSize(f, flushBytes)}, nil
+	l := &Logger{file: f, buf: bufio.NewWriterSize(f, flushBytes), done: make(chan struct{})}
+	l.ticker = time.NewTicker(flushInterval)
+	go l.flushLoop()
+	return l, nil
+}
+
+// flushLoop flushes on the timer so sparse output still reaches disk.
+func (l *Logger) flushLoop() {
+	for {
+		select {
+		case <-l.ticker.C:
+			_ = l.Flush()
+		case <-l.done:
+			return
+		}
+	}
 }
 
 // Write appends one chunk of session data as a log line. Binary input is
@@ -79,8 +100,16 @@ func (l *Logger) Flush() error {
 	return l.flushLocked()
 }
 
-// Close flushes and releases the file.
+// Close flushes, stops the flush loop and releases the file.
 func (l *Logger) Close() error {
+	if l.ticker != nil {
+		l.ticker.Stop()
+		select {
+		case <-l.done:
+		default:
+			close(l.done)
+		}
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if err := l.flushLocked(); err != nil {

@@ -172,6 +172,34 @@ func TestTail_MoreRequestedThanExists(t *testing.T) {
 	}
 }
 
+// Decision 8A dual flush: a sparse (silent) session's data must reach disk
+// via the time-based flush without any Close.
+func TestWrite_TimeFlushReachesDiskWithoutClose(t *testing.T) {
+	dir := t.TempDir()
+	l, err := Open(dir, 11)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer l.Close()
+	l.Write(time.Now(), DirRX, []byte("sparse line"))
+
+	// The 200ms ticker must push it out well before this deadline.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		data, err := os.ReadFile(paths.SessionLog(dir, 11))
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if strings.Contains(string(data), "sparse line") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("time flush never landed; log = %q", data)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // Surfaces survive restart: log file stays complete and readable (issue #4).
 func TestWrite_SurvivesCloseAndReopen(t *testing.T) {
 	dir := t.TempDir()

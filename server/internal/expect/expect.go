@@ -91,6 +91,9 @@ type Runner struct {
 
 	outMu sync.Mutex
 	out   []byte // device output since the current await began
+
+	readQuit chan struct{} // closed by stopRead to end the read loop
+	readDone chan struct{} // closed by the read loop on exit
 }
 
 // New creates a runner for the given sequence.
@@ -100,8 +103,12 @@ func New(cfg Config, port serialport.Port) *Runner {
 
 // Run executes the sequence synchronously: it returns when the sequence
 // completes, fails, or is aborted. One Runner runs at most one sequence.
+// On return the internal read loop is stopped: a second Runner on the same
+// port never races a zombie reader.
 func (r *Runner) Run() *Result {
-	return r.exec()
+	res := r.exec()
+	r.stopRead()
+	return res
 }
 
 // Abort stops the sequence at the next check.
@@ -109,6 +116,8 @@ func (r *Runner) Abort() { close(r.abort) }
 
 func (r *Runner) exec() *Result {
 	readErr := make(chan error, 1)
+	r.readQuit = make(chan struct{})
+	r.readDone = make(chan struct{})
 	go r.readLoop(readErr)
 
 	for i := range r.cfg.Steps {
@@ -191,8 +200,28 @@ func (r *Runner) await(stepIdx int, step *Step, readErr <-chan error) *Result {
 		m = MatchContains
 	}
 
+	// Compile the regex once for the whole step (was per 5ms poll tick).
+	var re *regexp.Regexp
+	if m == MatchRegex {
+		var err error
+		re, err = regexp.Compile(step.Await)
+		if err != nil {
+			return &Result{StepIndex: stepIdx, Detail: fmt.Sprintf("step %d bad regex: %v", stepIdx, err)}
+		}
+	}
+
 	for attempt := 0; attempt < attempts; attempt++ {
-		ok, detail := r.waitMatch(step.Await, m, timeout, readErr)
+		// A retry is a fresh attempt: re-send (VBS re-runs the whole step)
+		// and discard stale output so old bytes can never satisfy attempt 2.
+		if attempt > 0 {
+			r.resetOut()
+			if step.Send != "" {
+				if res := r.send(stepIdx, step); res != nil {
+					return res
+				}
+			}
+		}
+		ok, detail := r.waitMatch(step.Await, m, re, timeout, readErr)
 		if ok {
 			return nil
 		}
@@ -216,13 +245,12 @@ func (r *Runner) await(stepIdx int, step *Step, readErr <-chan error) *Result {
 
 // waitMatch blocks until Await matches accumulated output, the deadline
 // passes, the port errors, or the run is aborted.
-func (r *Runner) waitMatch(await string, m Match, timeout time.Duration, readErr <-chan error) (bool, string) {
+func (r *Runner) waitMatch(await string, m Match, re *regexp.Regexp, timeout time.Duration, readErr <-chan error) (bool, string) {
 	deadline := time.After(timeout)
 	tick := time.NewTicker(5 * time.Millisecond)
 	defer tick.Stop()
 
-	if r.match(await, m) {
-		r.resetOut()
+	if r.match(await, m, re) {
 		return true, ""
 	}
 	for {
@@ -234,8 +262,7 @@ func (r *Runner) waitMatch(await string, m Match, timeout time.Duration, readErr
 		case <-deadline:
 			return false, fmt.Sprintf("timeout after %s", timeout)
 		case <-tick.C:
-			if r.match(await, m) {
-				r.resetOut()
+			if r.match(await, m, re) {
 				return true, ""
 			}
 		}
@@ -245,10 +272,10 @@ func (r *Runner) waitMatch(await string, m Match, timeout time.Duration, readErr
 // match tests accumulated output; on success it clears the buffer so the
 // next await starts from fresh output (VBS semantics: each wait sees new
 // data only).
-func (r *Runner) match(await string, m Match) bool {
+func (r *Runner) match(await string, m Match, re *regexp.Regexp) bool {
 	r.outMu.Lock()
 	defer r.outMu.Unlock()
-	if !matchOutput(await, m, r.out) {
+	if !matchOutput(await, m, re, r.out) {
 		return false
 	}
 	r.out = nil
@@ -268,26 +295,50 @@ func (r *Runner) appendOut(data []byte) {
 }
 
 func (r *Runner) readLoop(errCh chan<- error) {
+	defer close(r.readDone)
 	buf := make([]byte, 4096)
 	for {
+		// Bound each Read so the stop signal is honored promptly even when
+		// no data ever arrives (the pipe honors deadlines; real COM too).
+		r.port.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		n, err := r.port.Read(buf)
 		if n > 0 {
 			r.appendOut(buf[:n])
 		}
+		select {
+		case <-r.readQuit:
+			return
+		default:
+		}
 		if err != nil {
+			// Deadline ticks are normal pacing; real errors end the loop.
+			if strings.Contains(err.Error(), "deadline") {
+				continue
+			}
 			errCh <- err
 			return
 		}
 	}
 }
 
-func matchOutput(await string, m Match, out []byte) bool {
+// stopRead ends the read loop and waits for it, so the port is exclusively
+// ours while running and unclaimed after Run returns.
+func (r *Runner) stopRead() {
+	if r.readQuit == nil {
+		return
+	}
+	close(r.readQuit)
+	select {
+	case <-r.readDone:
+	case <-time.After(time.Second):
+		// Port Read overruns its deadline by a bounded amount at worst.
+	}
+	r.readQuit = nil
+}
+
+func matchOutput(await string, m Match, re *regexp.Regexp, out []byte) bool {
 	switch m {
 	case MatchRegex:
-		re, err := regexp.Compile(await)
-		if err != nil {
-			return false // invalid pattern: never matches; Validate rejects
-		}
 		return re.Match(out)
 	case MatchExact:
 		return string(out) == await

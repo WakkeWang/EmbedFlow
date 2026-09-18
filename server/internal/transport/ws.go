@@ -123,9 +123,9 @@ const (
 func Handler(hub Hub, auth *AuthConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			// Browsers connect from the same origin; allow the local dev
-			// origins too. Same-origin verification happens at the HTTP
-			// layer in front (decision 3A); for M1 we accept and rely on auth.
+			// Cross-origin browser upgrades are refused by the SameOrigin
+			// middleware wrapping this handler (decision 3A). Here we accept
+			// whatever reached us and rely on token auth.
 			OriginPatterns: []string{"*"},
 		})
 		if err != nil {

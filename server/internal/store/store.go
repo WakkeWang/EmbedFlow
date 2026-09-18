@@ -23,6 +23,9 @@ type Session struct {
 	StartedAt time.Time
 	EndedAt   time.Time
 	EndReason string
+	// LogIncomplete marks a session whose log had write failures (design doc
+	// Failure modes: the disk-full gap) -- surfaced in UI and reports.
+	LogIncomplete bool
 }
 
 // Device is a registered target machine (CONTEXT.md: 设备).
@@ -81,14 +84,15 @@ CREATE TABLE IF NOT EXISTS devices (
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
-	id         INTEGER PRIMARY KEY AUTOINCREMENT,
-	device_id  INTEGER NOT NULL REFERENCES devices(id),
-	kind       TEXT NOT NULL CHECK (kind IN ('manual','task')),
-	owner      TEXT NOT NULL,
-	state      TEXT NOT NULL CHECK (state IN ('active','closed','failed')),
-	started_at TEXT NOT NULL,
-	ended_at   TEXT NOT NULL DEFAULT '',
-	end_reason TEXT NOT NULL DEFAULT ''
+	id             INTEGER PRIMARY KEY AUTOINCREMENT,
+	device_id      INTEGER NOT NULL REFERENCES devices(id),
+	kind           TEXT NOT NULL CHECK (kind IN ('manual','task')),
+	owner          TEXT NOT NULL,
+	state          TEXT NOT NULL CHECK (state IN ('active','closed','failed')),
+	started_at     TEXT NOT NULL,
+	ended_at       TEXT NOT NULL DEFAULT '',
+	end_reason     TEXT NOT NULL DEFAULT '',
+	log_incomplete INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_device_started ON sessions(device_id, started_at);
@@ -186,8 +190,8 @@ func (s *Store) GetSession(ctx context.Context, id int64) (Session, error) {
 	var sess Session
 	var started, ended string
 	err := s.db.QueryRowContext(ctx,
-		"SELECT id, device_id, kind, owner, state, started_at, ended_at, end_reason FROM sessions WHERE id = ?", id).
-		Scan(&sess.ID, &sess.DeviceID, &sess.Kind, &sess.Owner, &sess.State, &started, &ended, &sess.EndReason)
+		"SELECT id, device_id, kind, owner, state, started_at, ended_at, end_reason, log_incomplete FROM sessions WHERE id = ?", id).
+		Scan(&sess.ID, &sess.DeviceID, &sess.Kind, &sess.Owner, &sess.State, &started, &ended, &sess.EndReason, &sess.LogIncomplete)
 	if err != nil {
 		return Session{}, fmt.Errorf("store: get session %d: %w", id, err)
 	}
@@ -196,15 +200,27 @@ func (s *Store) GetSession(ctx context.Context, id int64) (Session, error) {
 	return sess, nil
 }
 
-// UpdateSession persists mutable session fields (state, end time, reason).
+// UpdateSession persists mutable session fields (state, end time, reason,
+// log-incomplete flag).
 func (s *Store) UpdateSession(ctx context.Context, sess Session) error {
 	return s.enqueue(ctx, func() error {
 		_, err := s.db.ExecContext(ctx,
-			"UPDATE sessions SET state = ?, ended_at = ?, end_reason = ? WHERE id = ?",
+			"UPDATE sessions SET state = ?, ended_at = ?, end_reason = ?, log_incomplete = ? WHERE id = ?",
 			sess.State,
 			sess.EndedAt.Format(time.RFC3339Nano),
 			sess.EndReason,
+			boolToInt(sess.LogIncomplete),
 			sess.ID)
+		return err
+	})
+}
+
+// MarkLogIncomplete flags a session's log as having had write failures
+// (design doc Failure modes: the disk-full gap). Callable mid-session, the
+// moment a write breaks -- not only at session end.
+func (s *Store) MarkLogIncomplete(ctx context.Context, id int64) error {
+	return s.enqueue(ctx, func() error {
+		_, err := s.db.ExecContext(ctx, "UPDATE sessions SET log_incomplete = 1 WHERE id = ?", id)
 		return err
 	})
 }
@@ -213,7 +229,7 @@ func (s *Store) UpdateSession(ctx context.Context, sess Session) error {
 // input (CEO-7A). Served by idx_sessions_state.
 func (s *Store) ActiveSessions(ctx context.Context) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, device_id, kind, owner, state, started_at, ended_at, end_reason FROM sessions WHERE state = 'active' ORDER BY id")
+		"SELECT id, device_id, kind, owner, state, started_at, ended_at, end_reason, log_incomplete FROM sessions WHERE state = 'active' ORDER BY id")
 	if err != nil {
 		return nil, fmt.Errorf("store: active sessions: %w", err)
 	}
@@ -222,7 +238,7 @@ func (s *Store) ActiveSessions(ctx context.Context) ([]Session, error) {
 	for rows.Next() {
 		var sess Session
 		var started, ended string
-		if err := rows.Scan(&sess.ID, &sess.DeviceID, &sess.Kind, &sess.Owner, &sess.State, &started, &ended, &sess.EndReason); err != nil {
+		if err := rows.Scan(&sess.ID, &sess.DeviceID, &sess.Kind, &sess.Owner, &sess.State, &started, &ended, &sess.EndReason, &sess.LogIncomplete); err != nil {
 			return nil, err
 		}
 		sess.StartedAt = parseTime(started)
@@ -230,6 +246,13 @@ func (s *Store) ActiveSessions(ctx context.Context) ([]Session, error) {
 		out = append(out, sess)
 	}
 	return out, rows.Err()
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func parseTime(s string) time.Time {
