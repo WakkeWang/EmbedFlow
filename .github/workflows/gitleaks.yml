@@ -14,9 +14,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # full history: gitleaks scans commits, not just the tree
+      # Default rules only (credentials). The internal-info extension
+      # (.gitleaks.toml with product-line/path patterns) is deliberately NOT
+      # committed: its rule literals are themselves internal names, so it
+      # lives only in local clones (see .gitignore). CI therefore enforces
+      # the credentials class; the internal-info class is enforced by the
+      # local pre-push habit and the squash-before-public gate (issue #13).
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # .gitleaks.toml at the repo root extends the default rules with
-        # EmbedFlow internal-info patterns (IPs, real paths, product-line
-        # names) -- default rules only catch credentials.
