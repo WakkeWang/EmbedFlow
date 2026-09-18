@@ -41,7 +41,7 @@ type Store struct {
 
 type writeOp struct {
 	fn   func() error
-	_err chan error
+	errc chan error
 }
 
 // Open creates/opens the database file, applies pragmas, runs migrations,
@@ -106,20 +106,20 @@ CREATE INDEX IF NOT EXISTS idx_sessions_state ON sessions(state);
 func (s *Store) writerLoop() {
 	defer close(s.done)
 	for op := range s.writeCh {
-		op._err <- op.fn()
+		op.errc <- op.fn()
 	}
 }
 
 // enqueue runs a write on the writer goroutine.
 func (s *Store) enqueue(ctx context.Context, fn func() error) error {
-	op := writeOp{fn: fn, _err: make(chan error, 1)}
+	op := writeOp{fn: fn, errc: make(chan error, 1)}
 	select {
 	case s.writeCh <- op:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 	select {
-	case err := <-op._err:
+	case err := <-op.errc:
 		return err
 	case <-ctx.Done():
 		return ctx.Err()

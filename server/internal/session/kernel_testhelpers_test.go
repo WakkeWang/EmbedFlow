@@ -1,23 +1,18 @@
 package session
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
 
 var t0 = time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
 
-const (
-	defaultIdleTimeout = 30 * time.Minute
-)
+const defaultIdleTimeout = 30 * time.Minute
 
-const (
-	idle = "idle"
-)
+const idle = "idle"
 
 // ---- result helpers ----
-
-type openResult = OpenResult
 
 func (r OpenResult) wantState(t *testing.T, state string) {
 	t.Helper()
@@ -48,27 +43,12 @@ func (r OpenResult) wantRejected(t *testing.T, reasonPart string) {
 	if !r.Rejected {
 		t.Fatalf("want rejection, got %+v", r)
 	}
-	if reasonPart != "" && !contains(r.Reason, reasonPart) {
+	if reasonPart != "" && !strings.Contains(r.Reason, reasonPart) {
 		t.Fatalf("reason = %q, want it to contain %q", r.Reason, reasonPart)
 	}
 }
 
-func contains(s, sub string) bool {
-	return len(sub) == 0 || (len(s) >= len(sub) && indexOf(s, sub) >= 0)
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}
-
 // ---- kernel helpers ----
-
-type kernel = Kernel
 
 func newTestKernel(opts ...Option) *Kernel {
 	o := Options{IdleTimeout: defaultIdleTimeout}
@@ -106,10 +86,6 @@ func (k *Kernel) wantDevice(t *testing.T, dev DeviceID, wantState string) {
 
 // ---- event helpers ----
 
-const (
-	evtSessionClosedKind = "session_closed"
-)
-
 func hasEvent(evts []Event, want Event) bool {
 	for _, e := range evts {
 		if e.Kind == want.Kind && e.SessionID == want.SessionID {
@@ -120,9 +96,9 @@ func hasEvent(evts []Event, want Event) bool {
 }
 
 func evtSessionClosed(id SessionID) Event {
-	return Event{Kind: evtSessionClosedKind, SessionID: id}
+	return Event{Kind: EventSessionClosed, SessionID: id}
 }
 
 func evtSweepFailed(id SessionID) Event {
-	return Event{Kind: "sweep_failed", SessionID: id}
+	return Event{Kind: EventSweepFailed, SessionID: id}
 }

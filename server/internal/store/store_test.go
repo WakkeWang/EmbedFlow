@@ -20,16 +20,15 @@ func openTestStore(t *testing.T) *Store {
 }
 
 func TestOpen_WALModeAndBusyTimeout(t *testing.T) {
-	s := openTestStore(sT(t))
+	s := openTestStore(t)
 	for _, want := range [][2]string{
 		{"journal_mode", "wal"},
 		{"busy_timeout", "5000"},
 	} {
-		var k, v string
+		var v string
 		if err := s.db.QueryRow("PRAGMA " + want[0]).Scan(&v); err != nil {
 			t.Fatalf("pragma %s: %v", want[0], err)
 		}
-		_ = k
 		if v != want[1] {
 			t.Fatalf("pragma %s = %q, want %q", want[0], v, want[1])
 		}
@@ -37,7 +36,7 @@ func TestOpen_WALModeAndBusyTimeout(t *testing.T) {
 }
 
 func TestCreateDevice_AndGet(t *testing.T) {
-	s := openTestStore(sT(t))
+	s := openTestStore(t)
 	id, err := s.CreateDevice(context.Background(), "d2000-lab-01", "yy0133")
 	if err != nil {
 		t.Fatalf("create device: %v", err)
@@ -55,7 +54,7 @@ func TestCreateDevice_AndGet(t *testing.T) {
 }
 
 func TestSessionRoundTrip_WithIndexes(t *testing.T) {
-	s := openTestStore(sT(t))
+	s := openTestStore(t)
 	ctx := context.Background()
 	devID, _ := s.CreateDevice(ctx, "dev", "proj")
 
@@ -102,7 +101,7 @@ func TestSessionRoundTrip_WithIndexes(t *testing.T) {
 }
 
 func TestActiveSessions_ReturnsActiveOnly(t *testing.T) {
-	s := openTestStore(sT(t))
+	s := openTestStore(t)
 	ctx := context.Background()
 	devID, _ := s.CreateDevice(ctx, "dev", "proj")
 	now := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
@@ -122,7 +121,7 @@ func TestActiveSessions_ReturnsActiveOnly(t *testing.T) {
 // Concurrent writers: all writes funnel through the single-writer queue
 // (decision 10A) and none are lost.
 func TestConcurrentWrites_SerialQueue_NoLostWrites(t *testing.T) {
-	s := openTestStore(sT(t))
+	s := openTestStore(t)
 	ctx := context.Background()
 	devID, _ := s.CreateDevice(ctx, "dev", "proj")
 
@@ -158,7 +157,7 @@ func TestConcurrentWrites_SerialQueue_NoLostWrites(t *testing.T) {
 func TestIndexes_ExistAtCreation(t *testing.T) {
 	// CEO-8A: the sessions(device_id, started_at) composite index and the
 	// sessions(status) index are created with the table, not later.
-	s := openTestStore(sT(t))
+	s := openTestStore(t)
 	rows, err := s.db.Query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='sessions' AND name LIKE 'idx_%'")
 	if err != nil {
 		t.Fatalf("query indexes: %v", err)

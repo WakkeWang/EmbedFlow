@@ -36,7 +36,9 @@ func TestOpen_SameUserIdempotent_ReturnsExistingSession(t *testing.T) {
 
 func TestOpen_SameUserDifferentKind_NotIdempotent(t *testing.T) {
 	// A manual session does not satisfy a task-session request: different
-	// lifecycle semantics (decision CEO-15A keys on user+device+kind).
+	// lifecycle semantics. CEO-15A as amended records the key as
+	// user+device+kind (manual and task sessions differ in timeout and
+	// disconnect behavior; returning the wrong one would mislead operators).
 	k := newTestKernel()
 	k.Open(openReq{User: "alice", Device: 1, Kind: KindManual, Now: t0})
 	r := k.Open(openReq{User: "alice", Device: 1, Kind: KindTask, Now: t0.Add(time.Second)})

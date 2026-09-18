@@ -43,13 +43,13 @@ const (
 // IdleTimeoutDefault is the default manual-session idle timeout (decision 11A).
 const IdleTimeoutDefault = 30 * time.Minute
 
-// Liveness thresholds (decision CEO-16A): heartbeat lost 5s marks the client
-// connection down (detection); a task session is killed only after a further
-// 30s reconnect grace window so a WiFi blip does not murder a flash run.
+// Liveness threshold defaults (decision CEO-16A): heartbeat lost 5s marks the
+// client connection down (detection); a task session is killed only after a
+// further 30s reconnect grace window so a WiFi blip does not murder a flash
+// run. Both are configurable via Options.
 const (
-	HeartbeatLostAfter   = 5 * time.Second
-	TaskGraceWindow      = 30 * time.Second
-	GraceWarningDeadline = 5 * time.Minute // idle-timeout countdown warning (issue 5)
+	HeartbeatLostAfterDefault = 5 * time.Second
+	TaskGraceWindowDefault    = 30 * time.Second
 )
 
 // OpenResult is the outcome of an open request.
@@ -121,9 +121,13 @@ const (
 	EventSweepFailed   = "sweep_failed"
 )
 
-// Options configures the kernel.
+// Options configures the kernel. Zero-value fields take the design-doc
+// defaults; the server exposes them as flags (CEO-16A: both liveness
+// parameters configurable).
 type Options struct {
-	IdleTimeout time.Duration
+	IdleTimeout        time.Duration
+	HeartbeatLostAfter time.Duration
+	TaskGraceWindow    time.Duration
 }
 
 // Option mutates Options.
@@ -136,11 +140,13 @@ func WithIdleTimeout(d time.Duration) Option { return func(o *Options) { o.IdleT
 // device mutex decisions happen under the kernel's own lock (decisions CEO-2A,
 // CEO-15A: lock-then-check-then-create).
 type Kernel struct {
-	mu          sync.Mutex
-	idleTimeout time.Duration
-	nextID      SessionID
-	sessions    map[SessionID]*Session
-	devices     map[DeviceID]*DeviceState
+	mu                 sync.Mutex
+	idleTimeout        time.Duration
+	heartbeatLostAfter time.Duration
+	taskGraceWindow    time.Duration
+	nextID             SessionID
+	sessions           map[SessionID]*Session
+	devices            map[DeviceID]*DeviceState
 }
 
 // New creates an empty kernel.
@@ -148,10 +154,18 @@ func New(opts Options) *Kernel {
 	if opts.IdleTimeout <= 0 {
 		opts.IdleTimeout = IdleTimeoutDefault
 	}
+	if opts.HeartbeatLostAfter <= 0 {
+		opts.HeartbeatLostAfter = HeartbeatLostAfterDefault
+	}
+	if opts.TaskGraceWindow <= 0 {
+		opts.TaskGraceWindow = TaskGraceWindowDefault
+	}
 	return &Kernel{
-		idleTimeout: opts.IdleTimeout,
-		sessions:    map[SessionID]*Session{},
-		devices:     map[DeviceID]*DeviceState{},
+		idleTimeout:        opts.IdleTimeout,
+		heartbeatLostAfter: opts.HeartbeatLostAfter,
+		taskGraceWindow:    opts.TaskGraceWindow,
+		sessions:           map[SessionID]*Session{},
+		devices:            map[DeviceID]*DeviceState{},
 	}
 }
 
@@ -167,8 +181,10 @@ type OpenRequest struct {
 }
 
 // Open attempts to start a session. Idempotency key = user+device+kind
-// (decision CEO-15A): the same user repeating returns their active session;
-// a different user is rejected busy with occupier details.
+// (decision CEO-15A as amended: manual and task sessions differ in lifecycle
+// semantics, so one kind never satisfies the other; repeats of the same kind
+// return the active session; a different user is rejected busy with occupier
+// details).
 func (k *Kernel) Open(req openReq) OpenResult {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -293,18 +309,8 @@ func (k *Kernel) Tick(now time.Time) []Event {
 	defer k.mu.Unlock()
 
 	var evts []Event
-	// Deterministic order for reproducible events.
-	ids := make([]SessionID, 0, len(k.sessions))
-	for id := range k.sessions {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-
-	for _, id := range ids {
+	for _, id := range k.activeIDsLocked() {
 		s := k.sessions[id]
-		if s.State != StateActive {
-			continue
-		}
 
 		// Manual idle timeout (decision 11A): no input for the timeout closes
 		// the session and frees the device. Task sessions never idle out
@@ -315,7 +321,7 @@ func (k *Kernel) Tick(now time.Time) []Event {
 		}
 
 		// Dual-threshold liveness (decision CEO-16A).
-		hbDown := now.Sub(s.lastHeartbeat) >= HeartbeatLostAfter
+		hbDown := now.Sub(s.lastHeartbeat) >= k.heartbeatLostAfter
 		switch {
 		case hbDown && s.connDownAt.IsZero():
 			// Detection level: mark down, notify; do not tear anything yet.
@@ -333,15 +339,28 @@ func (k *Kernel) Tick(now time.Time) []Event {
 			// transport drop is handled by explicit disconnect or idle timeout.
 			elapsed := now.Sub(s.connDownAt)
 			if s.Kind == KindTask {
-				if elapsed >= TaskGraceWindow {
+				if elapsed >= k.taskGraceWindow {
 					evts = append(evts, k.terminate(s, StateFailed, ReasonHeartbeatGone, now)...)
 				} else {
-					evts = append(evts, Event{Kind: EventConnWarning, SessionID: s.ID, DeviceID: s.DeviceID, Detail: (TaskGraceWindow - elapsed).String(), At: now})
+					evts = append(evts, Event{Kind: EventConnWarning, SessionID: s.ID, DeviceID: s.DeviceID, Detail: (k.taskGraceWindow - elapsed).String(), At: now})
 				}
 			}
 		}
 	}
 	return evts
+}
+
+// activeIDsLocked lists active session IDs in deterministic order. Callers
+// hold k.mu.
+func (k *Kernel) activeIDsLocked() []SessionID {
+	ids := make([]SessionID, 0, len(k.sessions))
+	for id, s := range k.sessions {
+		if s.State == StateActive {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }
 
 // SweepStartup marks every active session found in storage as failed with the
@@ -351,16 +370,8 @@ func (k *Kernel) SweepStartup(reason string, now time.Time) []Event {
 	defer k.mu.Unlock()
 
 	var evts []Event
-	ids := make([]SessionID, 0, len(k.sessions))
-	for id := range k.sessions {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	for _, id := range ids {
+	for _, id := range k.activeIDsLocked() {
 		s := k.sessions[id]
-		if s.State != StateActive {
-			continue
-		}
 		evts = append(evts, k.terminate(s, StateFailed, reason, now)...)
 		evts = append(evts, Event{Kind: EventSweepFailed, SessionID: s.ID, DeviceID: s.DeviceID, Detail: reason, At: now})
 	}

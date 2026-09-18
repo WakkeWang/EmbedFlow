@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/WakkeWang/EmbedFlow/pkg/protocol"
@@ -11,13 +13,16 @@ import (
 	"github.com/WakkeWang/EmbedFlow/server/internal/transport"
 )
 
+var errAuthFailed = errors.New("invalid token")
+
 // coordinator is the M1 session executor: it implements transport.Hub,
 // translating kernel events into persistence and wire side effects. T1 scope
-// keeps it minimal: auth stub, connection registry, session state broadcast.
+// keeps it minimal: bootstrap auth stub, connection registry, session state.
 type coordinator struct {
 	kernel *session.Kernel
 	store  *store.Store
 
+	mu    sync.Mutex
 	conns map[*transport.ClientConn]struct{}
 }
 
@@ -29,12 +34,6 @@ func (h *coordinator) validateToken(token string) (string, error) {
 	}
 	return "", errAuthFailed
 }
-
-var errAuthFailed = errAuth{}
-
-type errAuth struct{}
-
-func (errAuth) Error() string { return "invalid token" }
 
 // --- transport.Hub ---
 
@@ -50,7 +49,13 @@ func (h *coordinator) OnControl(c *transport.ClientConn, f *protocol.Frame) {
 			Now:    time.Now(),
 		})
 		if res.Rejected {
-			_ = c.Send(protocol.Frame{Type: protocol.FrameAuthFail, Body: &protocol.AuthFailFrame{Reason: res.Reason}})
+			// Device-busy is a session outcome, not an auth failure (4A
+			// frame semantics): report it on the session-state channel.
+			_ = c.Send(protocol.Frame{Type: protocol.FrameSessionState, Body: &protocol.SessionStateFrame{
+				DeviceID: body.DeviceID,
+				State:    "rejected",
+				Detail:   res.Reason,
+			}})
 			return
 		}
 		_ = c.Send(protocol.Frame{Type: protocol.FrameSessionState, Body: &protocol.SessionStateFrame{
@@ -68,7 +73,19 @@ func (h *coordinator) OnBinary(c *transport.ClientConn, data []byte) {
 	// T3/T4 route it through the session log and back out to subscribers.
 }
 
+func (h *coordinator) OnHeartbeat(c *transport.ClientConn, seq uint64) {
+	// Feed the kernel's liveness clock (CEO-16A). Session attribution to a
+	// specific bound session arrives with T5; T1 tracks it per connection.
+	h.mu.Lock()
+	h.conns[c] = struct{}{}
+	h.mu.Unlock()
+	h.kernel.ClientHeartbeat(0, time.Now()) // no-op until sessions bind (T5)
+}
+
 func (h *coordinator) OnClose(c *transport.ClientConn) {
+	h.mu.Lock()
+	delete(h.conns, c)
+	h.mu.Unlock()
 	// T5: disconnect semantics route through the kernel once connections
 	// carry bound sessions.
 }

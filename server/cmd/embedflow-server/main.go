@@ -50,6 +50,7 @@ func main() {
 	hub := &coordinator{
 		kernel: kernel,
 		store:  st,
+		conns:  map[*transport.ClientConn]struct{}{},
 	}
 
 	// Startup sweep (CEO-7A): any session left "active" in the DB by a

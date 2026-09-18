@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,8 +17,14 @@ import (
 // binary frame routing (decision 4A, CEO-11A, CEO-3A).
 
 type testHub struct {
-	frames chan *protocol.Frame
-	binary chan []byte
+	frames     chan *protocol.Frame
+	binary     chan []byte
+	heartbeats chan heartbeatEvt
+}
+
+type heartbeatEvt struct {
+	c   *ClientConn
+	seq uint64
 }
 
 func (h *testHub) OnControl(c *ClientConn, f *protocol.Frame) {
@@ -31,6 +38,12 @@ func (h *testHub) OnBinary(c *ClientConn, data []byte) {
 		cp := make([]byte, len(data))
 		copy(cp, data)
 		h.binary <- cp
+	}
+}
+
+func (h *testHub) OnHeartbeat(c *ClientConn, seq uint64) {
+	if h.heartbeats != nil {
+		h.heartbeats <- heartbeatEvt{c: c, seq: seq}
 	}
 }
 
@@ -157,7 +170,7 @@ func TestWS_VersionMismatch_RejectedWithUpdateHint(t *testing.T) {
 	if f.Type != protocol.FrameAuthFail || !ok {
 		t.Fatalf("want AuthFail frame, got type %d body %T", f.Type, f.Body)
 	}
-	if !containsStr(fail.Reason, "update") {
+	if !strings.Contains(fail.Reason, "update") {
 		t.Fatalf("reason = %q, want it to mention update", fail.Reason)
 	}
 }
@@ -248,17 +261,4 @@ func TestWS_HeartbeatEchoed(t *testing.T) {
 			return
 		}
 	}
-}
-
-func containsStr(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(sub) == 0 || indexOfStr(s, sub) >= 0)
-}
-
-func indexOfStr(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }

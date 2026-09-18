@@ -38,6 +38,10 @@ type Hub interface {
 	OnControl(c *ClientConn, f *protocol.Frame)
 	// OnBinary receives serial byte-stream payloads (data frames).
 	OnBinary(c *ClientConn, data []byte)
+	// OnHeartbeat receives client liveness pings so the executor can drive
+	// the kernel's dual-threshold check (CEO-16A). The transport still echoes
+	// them itself.
+	OnHeartbeat(c *ClientConn, seq uint64)
 	// OnClose fires when a connection goes away (cleanly or not).
 	OnClose(c *ClientConn)
 }
@@ -229,9 +233,13 @@ func readLoop(c *ClientConn, hub Hub) {
 			if !c.Authed() {
 				continue
 			}
-			// Heartbeats are transport-internal: refresh liveness and echo.
+			// Heartbeats are transport-internal: echo for RTT inspection,
+			// and hand to the hub so the kernel's liveness clock advances
+			// (CEO-16A). Without this, lastHeartbeat freezes at open time
+			// and live task sessions get killed by the grace window.
 			if hb, ok := f.Body.(*protocol.HeartbeatFrame); ok {
 				_ = c.Send(protocol.Frame{Type: protocol.FrameHeartbeat, Body: hb})
+				hub.OnHeartbeat(c, hb.Seq)
 				continue
 			}
 			hub.OnControl(c, f)
