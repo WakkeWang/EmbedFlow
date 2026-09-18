@@ -12,7 +12,7 @@ import (
 
 func TestOpen_FirstManualSession_OccupiesDevice(t *testing.T) {
 	k := newTestKernel()
-	r := k.Open(openReq{User: "alice", Device: 1, Kind: KindManual, Now: t0})
+	r := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindManual, Now: t0})
 	r.wantState(t, StateActive)
 	r.wantKind(t, KindManual)
 	r.wantOwner(t, "alice")
@@ -20,15 +20,15 @@ func TestOpen_FirstManualSession_OccupiesDevice(t *testing.T) {
 
 func TestOpen_SecondUserWhileBusy_RejectedWithOccupier(t *testing.T) {
 	k := newTestKernel()
-	k.Open(openReq{User: "alice", Device: 1, Kind: KindManual, Now: t0})
-	r := k.Open(openReq{User: "bob", Device: 1, Kind: KindManual, Now: t0.Add(time.Second)})
+	k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindManual, Now: t0})
+	r := k.Open(OpenRequest{User: "bob", Device: 1, Kind: KindManual, Now: t0.Add(time.Second)})
 	r.wantRejected(t, "device busy")
 }
 
 func TestOpen_SameUserIdempotent_ReturnsExistingSession(t *testing.T) {
 	k := newTestKernel()
-	r1 := k.Open(openReq{User: "alice", Device: 1, Kind: KindManual, Now: t0})
-	r2 := k.Open(openReq{User: "alice", Device: 1, Kind: KindManual, Now: t0.Add(time.Second)})
+	r1 := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindManual, Now: t0})
+	r2 := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindManual, Now: t0.Add(time.Second)})
 	if r2.Rejected || r2.SessionID != r1.SessionID {
 		t.Fatalf("idempotent open: got %+v, want session %d", r2, r1.SessionID)
 	}
@@ -40,15 +40,15 @@ func TestOpen_SameUserDifferentKind_NotIdempotent(t *testing.T) {
 	// user+device+kind (manual and task sessions differ in timeout and
 	// disconnect behavior; returning the wrong one would mislead operators).
 	k := newTestKernel()
-	k.Open(openReq{User: "alice", Device: 1, Kind: KindManual, Now: t0})
-	r := k.Open(openReq{User: "alice", Device: 1, Kind: KindTask, Now: t0.Add(time.Second)})
+	k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindManual, Now: t0})
+	r := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindTask, Now: t0.Add(time.Second)})
 	r.wantRejected(t, "device busy")
 }
 
 func TestOpen_IndependentDevices_BothSucceed(t *testing.T) {
 	k := newTestKernel()
-	r1 := k.Open(openReq{User: "alice", Device: 1, Kind: KindManual, Now: t0})
-	r2 := k.Open(openReq{User: "bob", Device: 2, Kind: KindManual, Now: t0})
+	r1 := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindManual, Now: t0})
+	r2 := k.Open(OpenRequest{User: "bob", Device: 2, Kind: KindManual, Now: t0})
 	if r1.Rejected || r2.Rejected {
 		t.Fatalf("independent devices should both open: %+v %+v", r1, r2)
 	}
@@ -58,7 +58,7 @@ func TestOpen_IndependentDevices_BothSucceed(t *testing.T) {
 
 func TestDisconnect_TaskSession_FailsTerminated(t *testing.T) {
 	k := newTestKernel()
-	r := k.Open(openReq{User: "alice", Device: 1, Kind: KindTask, Now: t0})
+	r := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindTask, Now: t0})
 	k.ClientDisconnected(r.SessionID, t0.Add(time.Minute))
 	k.wantSession(t, r.SessionID, StateFailed)
 	k.wantDevice(t, 1, idle) // mutex released
@@ -66,7 +66,7 @@ func TestDisconnect_TaskSession_FailsTerminated(t *testing.T) {
 
 func TestDisconnect_ManualSession_ClosesAndReleases(t *testing.T) {
 	k := newTestKernel()
-	r := k.Open(openReq{User: "alice", Device: 1, Kind: KindManual, Now: t0})
+	r := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindManual, Now: t0})
 	k.ClientDisconnected(r.SessionID, t0.Add(time.Minute))
 	k.wantSession(t, r.SessionID, StateClosed)
 	k.wantDevice(t, 1, idle)
@@ -81,7 +81,7 @@ func TestDisconnect_UnknownSession_Noop(t *testing.T) {
 
 func TestTick_ManualSessionIdle_ExceedsTimeoutCloses(t *testing.T) {
 	k := newTestKernel(withIdleTimeout(30 * time.Minute))
-	r := k.Open(openReq{User: "alice", Device: 1, Kind: KindManual, Now: t0})
+	r := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindManual, Now: t0})
 	evts := k.Tick(t0.Add(31 * time.Minute))
 	k.wantSession(t, r.SessionID, StateClosed)
 	k.wantDevice(t, 1, idle)
@@ -92,14 +92,14 @@ func TestTick_ManualSessionIdle_ExceedsTimeoutCloses(t *testing.T) {
 
 func TestTick_ManualSessionIdle_UnderTimeoutStays(t *testing.T) {
 	k := newTestKernel(withIdleTimeout(30 * time.Minute))
-	r := k.Open(openReq{User: "alice", Device: 1, Kind: KindManual, Now: t0})
+	r := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindManual, Now: t0})
 	k.Tick(t0.Add(29 * time.Minute))
 	k.wantSession(t, r.SessionID, StateActive)
 }
 
 func TestTick_ManualSessionAnyInputResetsIdleTimer(t *testing.T) {
 	k := newTestKernel(withIdleTimeout(30 * time.Minute))
-	r := k.Open(openReq{User: "alice", Device: 1, Kind: KindManual, Now: t0})
+	r := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindManual, Now: t0})
 	k.UserInput(r.SessionID, t0.Add(20*time.Minute)) // keepalive
 	k.Tick(t0.Add(40 * time.Minute))                 // 20+30 exceeded, but input at 20 reset
 	k.wantSession(t, r.SessionID, StateActive)
@@ -111,7 +111,7 @@ func TestTick_TaskSession_NoIdleTimeout(t *testing.T) {
 	// CEO-1A: task sessions have no global idle timer -- flash install can be
 	// silent for 10+ minutes; only per-step expect timeouts apply (M3+).
 	k := newTestKernel(withIdleTimeout(30 * time.Minute))
-	r := k.Open(openReq{User: "alice", Device: 1, Kind: KindTask, Now: t0})
+	r := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindTask, Now: t0})
 	k.Tick(t0.Add(24 * time.Hour))
 	k.wantSession(t, r.SessionID, StateActive)
 }
@@ -120,7 +120,7 @@ func TestTick_TaskSession_NoIdleTimeout(t *testing.T) {
 
 func TestTick_HeartbeatLost5s_ClientConnectionMarkedDown(t *testing.T) {
 	k := newTestKernel()
-	r := k.Open(openReq{User: "alice", Device: 1, Kind: KindManual, Now: t0})
+	r := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindManual, Now: t0})
 	k.ClientHeartbeat(r.SessionID, t0)
 	k.Tick(t0.Add(6 * time.Second))
 	k.wantSession(t, r.SessionID, StateActive) // detection only: manual session not yet torn down
@@ -128,7 +128,7 @@ func TestTick_HeartbeatLost5s_ClientConnectionMarkedDown(t *testing.T) {
 
 func TestTick_TaskSession_HeartbeatLostPastGrace_Fails(t *testing.T) {
 	k := newTestKernel()
-	r := k.Open(openReq{User: "alice", Device: 1, Kind: KindTask, Now: t0})
+	r := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindTask, Now: t0})
 	k.ClientHeartbeat(r.SessionID, t0)
 	// 30s grace window (reconnect tolerance) after the 5s detection threshold.
 	k.Tick(t0.Add(6 * time.Second))
@@ -140,7 +140,7 @@ func TestTick_TaskSession_HeartbeatLostPastGrace_Fails(t *testing.T) {
 
 func TestTick_TaskSession_HeartbeatRecoversWithinGrace_Continues(t *testing.T) {
 	k := newTestKernel()
-	r := k.Open(openReq{User: "alice", Device: 1, Kind: KindTask, Now: t0})
+	r := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindTask, Now: t0})
 	k.ClientHeartbeat(r.SessionID, t0)
 	k.Tick(t0.Add(6 * time.Second))                        // detected down
 	k.ClientHeartbeat(r.SessionID, t0.Add(20*time.Second)) // back within 30s grace
@@ -152,8 +152,8 @@ func TestTick_TaskSession_HeartbeatRecoversWithinGrace_Continues(t *testing.T) {
 
 func TestSweepStartup_LegacyActiveSessions_FailedWithReason(t *testing.T) {
 	k := newTestKernel()
-	mr := k.Open(openReq{User: "alice", Device: 1, Kind: KindManual, Now: t0})
-	tr := k.Open(openReq{User: "bob", Device: 2, Kind: KindTask, Now: t0})
+	mr := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindManual, Now: t0})
+	tr := k.Open(OpenRequest{User: "bob", Device: 2, Kind: KindTask, Now: t0})
 	m, _ := k.Session(mr.SessionID)
 	task, _ := k.Session(tr.SessionID)
 	k2 := New(Options{IdleTimeout: defaultIdleTimeout})
@@ -170,7 +170,7 @@ func TestSweepStartup_LegacyActiveSessions_FailedWithReason(t *testing.T) {
 
 func TestSweepStartup_FinishedSessions_Untouched(t *testing.T) {
 	k := newTestKernel()
-	mr := k.Open(openReq{User: "alice", Device: 1, Kind: KindManual, Now: t0})
+	mr := k.Open(OpenRequest{User: "alice", Device: 1, Kind: KindManual, Now: t0})
 	k.Close(mr.SessionID, t0.Add(time.Minute))
 	m, _ := k.Session(mr.SessionID)
 	k2 := New(Options{IdleTimeout: defaultIdleTimeout})

@@ -53,19 +53,11 @@ type Hub interface {
 type ClientConn struct {
 	Conn *websocket.Conn
 
-	mu      sync.Mutex
-	user    string
-	kind    string // "client" | "browser"
-	authed  bool
-	session *connSession
-	closed  bool
-}
-
-// connSession tracks what this connection is bound to (shared device port /
-// subscribed session) once the executor claims it. The transport only stores
-// it; the executor owns the semantics.
-type connSession struct {
-	ID int64
+	mu     sync.Mutex
+	user   string
+	kind   string // "client" (browser vs device-client distinction rides the hub's connState)
+	authed bool
+	closed bool
 }
 
 // User returns the authenticated username.

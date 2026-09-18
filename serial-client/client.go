@@ -28,6 +28,9 @@ type Client struct {
 	serverURL string
 	token     string
 
+	connCtx    context.Context
+	connCancel context.CancelFunc
+
 	mu        sync.Mutex
 	conn      *websocket.Conn
 	shared    bool
@@ -35,8 +38,9 @@ type Client struct {
 	port      string
 	localPort PortOpener
 
-	stop chan struct{}
-	done sync.WaitGroup
+	stop      chan struct{}
+	closeOnce sync.Once
+	done      sync.WaitGroup
 }
 
 // New creates a client pointed at a server (e.g. http://192.168.0.80:8420).
@@ -75,10 +79,24 @@ func Login(serverURL, username, password string) (string, error) {
 	return out.Token, nil
 }
 
-// Connect dials the WS endpoint and authenticates (CEO-11A version field).
+// Connect dials the WS endpoint and authenticates (CEO-11A version field),
+// then runs the connection manager: heartbeat pings, reconnect with
+// exponential backoff (CONTEXT.md: 断线重连; decision 12A -- a reconnect
+// restores the shared port, never a session).
 func (c *Client) Connect(ctx context.Context) error {
+	c.connCtx, c.connCancel = context.WithCancel(ctx)
+	if err := c.connectOnce(); err != nil {
+		return err
+	}
+	c.done.Add(1)
+	go c.manageLoop()
+	return nil
+}
+
+// connectOnce performs one dial + handshake.
+func (c *Client) connectOnce() error {
 	wsURL := strings.Replace(c.serverURL, "http", "ws", 1) + "/ws/client"
-	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	dialCtx, cancel := context.WithTimeout(c.connCtx, 10*time.Second)
 	defer cancel()
 	ws, _, err := websocket.Dial(dialCtx, wsURL, &websocket.DialOptions{
 		HTTPClient: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: false}}},
@@ -98,7 +116,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
+	wctx, wcancel := context.WithTimeout(c.connCtx, 5*time.Second)
 	defer wcancel()
 	if err := ws.Write(wctx, websocket.MessageText, authWire); err != nil {
 		return fmt.Errorf("client: auth write: %w", err)
@@ -121,6 +139,57 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.done.Add(1)
 	go c.readLoop()
 	return nil
+}
+
+// manageLoop keeps the connection alive: heartbeat every 2s, reconnect with
+// exponential backoff on loss, and re-share the port after reconnecting
+// (decision 12A: only the shared state survives a reconnect).
+func (c *Client) manageLoop() {
+	defer c.done.Done()
+	heartbeat := time.NewTicker(2 * time.Second)
+	defer heartbeat.Stop()
+	var seq uint64
+	for {
+		select {
+		case <-c.connCtx.Done():
+			return
+		case <-c.stop:
+			return
+		case <-heartbeat.C:
+			seq++
+			c.send(&protocol.HeartbeatFrame{Seq: seq})
+		}
+	}
+}
+
+// reconnectLoop re-dials with backoff until stopped or cancelled.
+func (c *Client) reconnectLoop() {
+	backoff := time.Second
+	for {
+		select {
+		case <-c.connCtx.Done():
+			return
+		case <-c.stop:
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
+		}
+		if err := c.connectOnce(); err != nil {
+			slog.Warn("reconnect failed", "err", err)
+			continue
+		}
+		// Shared state restored (decision 12A): re-share the same device.
+		c.mu.Lock()
+		shared, deviceID, portName := c.shared, c.deviceID, c.port
+		c.mu.Unlock()
+		if shared {
+			c.send(&protocol.ShareRequestFrame{DeviceID: deviceID, Port: portName})
+			slog.Info("port re-shared after reconnect", "device", deviceID, "port", portName)
+		}
+		return
+	}
 }
 
 // Share binds the local serial port to a registered device and starts the
@@ -189,7 +258,8 @@ func (c *Client) portToServer(p PortOpener) {
 }
 
 // readLoop decodes server frames: control (state/progress) logged; binary
-// frames are server->device bytes written into the local port.
+// frames are server->device bytes written into the local port. On exit the
+// connection is gone -- trigger the reconnect loop unless shutting down.
 func (c *Client) readLoop() {
 	defer c.done.Done()
 	portRef := func() PortOpener {
@@ -203,11 +273,13 @@ func (c *Client) readLoop() {
 			return
 		default:
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(c.connCtx, 60*time.Second)
 		typ, data, err := c.conn.Read(ctx)
 		cancel()
 		if err != nil {
 			slog.Warn("server connection lost", "err", err)
+			c.done.Add(1)
+			go c.reconnectLoop()
 			return
 		}
 		switch typ {
@@ -263,14 +335,22 @@ func (c *Client) SetLocalPort(p PortOpener) {
 	c.mu.Unlock()
 }
 
-// Close tears down the connection and goroutines.
+// Close tears down the connection and all goroutines. Ordering matters:
+// cancel first so blocked Reads return, then close the socket, then wait
+// briefly for the goroutines (bounded -- a reconnect loop dial in flight
+// finishes its 10s timeout at worst, and we do not hold the caller hostage
+// to it).
 func (c *Client) Close() {
-	close(c.stop)
-	c.done.Wait()
-	c.mu.Lock()
-	conn := c.conn
-	c.mu.Unlock()
-	if conn != nil {
-		conn.CloseNow()
-	}
+	c.closeOnce.Do(func() {
+		if c.connCancel != nil {
+			c.connCancel()
+		}
+		c.mu.Lock()
+		conn := c.conn
+		c.mu.Unlock()
+		if conn != nil {
+			conn.CloseNow()
+		}
+		close(c.stop)
+	})
 }

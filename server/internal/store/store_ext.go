@@ -210,6 +210,18 @@ func (s *Store) ConfirmationsForSession(ctx context.Context, sessionID int64) ([
 	return out, rows.Err()
 }
 
+// MaxSessionID returns the highest session ID ever persisted -- the startup
+// sweep seeds the kernel counter from it so new IDs never collide with
+// finished rows (plain autoincrement inside the kernel would drift).
+func (s *Store) MaxSessionID(ctx context.Context) (int64, error) {
+	var max sql.NullInt64
+	err := s.db.QueryRowContext(ctx, "SELECT MAX(id) FROM sessions").Scan(&max)
+	if err != nil {
+		return 0, fmt.Errorf("store: max session id: %w", err)
+	}
+	return max.Int64, nil
+}
+
 // SessionsForDevice lists a device's session history, oldest first
 // (requirement 3.3: history keyed by device). Served by
 // idx_sessions_device_started.

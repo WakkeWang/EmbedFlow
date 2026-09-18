@@ -389,6 +389,17 @@ func (h *coordinator) handleCloseSession(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
+	// Issue #6: owner or admin may close a session.
+	user, role, _ := h.tokens.validate(bearerToken(r))
+	sess, ok := h.kernel.Session(session.SessionID(id))
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no such session")
+		return
+	}
+	if role != "admin" && sess.Owner != user {
+		writeErr(w, http.StatusForbidden, "not your session")
+		return
+	}
 	for _, ev := range h.kernel.Close(session.SessionID(id), time.Now()) {
 		h.apply(ev)
 	}

@@ -19,7 +19,7 @@ func TestOpen_ConcurrentSameDevice_ExactlyOneWinner(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			results <- k.Open(openReq{
+			results <- k.Open(OpenRequest{
 				User:   "u",
 				Device: 1,
 				Kind:   KindManual,

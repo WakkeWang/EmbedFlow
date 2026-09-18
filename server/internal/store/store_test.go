@@ -106,8 +106,8 @@ func TestActiveSessions_ReturnsActiveOnly(t *testing.T) {
 	devID, _ := s.CreateDevice(ctx, "dev", "proj")
 	now := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
 
-	activeID, _ := s.CreateSession(ctx, Session{DeviceID: devID, Kind: "task", Owner: "bob", State: "active", StartedAt: now})
-	closedID, _ := s.CreateSession(ctx, Session{DeviceID: devID, Kind: "manual", Owner: "alice", State: "closed", StartedAt: now})
+	activeID, _ := s.CreateSession(ctx, Session{ID: 1, DeviceID: devID, Kind: "task", Owner: "bob", State: "active", StartedAt: now})
+	closedID, _ := s.CreateSession(ctx, Session{ID: 2, DeviceID: devID, Kind: "manual", Owner: "alice", State: "closed", StartedAt: now})
 
 	actives, err := s.ActiveSessions(ctx)
 	if err != nil {
@@ -119,7 +119,8 @@ func TestActiveSessions_ReturnsActiveOnly(t *testing.T) {
 }
 
 // Concurrent writers: all writes funnel through the single-writer queue
-// (decision 10A) and none are lost.
+// (decision 10A) and none are lost. Explicit IDs -- the kernel assigns
+// session IDs; the store must persist exactly those (no renumbering).
 func TestConcurrentWrites_SerialQueue_NoLostWrites(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -127,11 +128,12 @@ func TestConcurrentWrites_SerialQueue_NoLostWrites(t *testing.T) {
 
 	const n = 32
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := 1; i <= n; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			_, err := s.CreateSession(ctx, Session{
+				ID:        int64(i),
 				DeviceID:  devID,
 				Kind:      "manual",
 				Owner:     "u",

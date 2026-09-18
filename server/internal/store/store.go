@@ -192,12 +192,15 @@ func (s *Store) GetDevice(ctx context.Context, id int64) (Device, error) {
 	return d, nil
 }
 
-// CreateSession inserts a session record.
+// CreateSession inserts a session record. The kernel owns ID assignment;
+// the store must persist exactly that ID so log paths, HTTP actions and
+// restart sweeps all address the same row (a plain autoincrement drifts
+// from the kernel's counter after any restart).
 func (s *Store) CreateSession(ctx context.Context, sess Session) (int64, error) {
-	var id int64
 	err := s.enqueue(ctx, func() error {
-		res, err := s.db.ExecContext(ctx,
-			"INSERT INTO sessions (device_id, kind, owner, state, started_at, ended_at, end_reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		_, err := s.db.ExecContext(ctx,
+			"INSERT INTO sessions (id, device_id, kind, owner, state, started_at, ended_at, end_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			sess.ID,
 			sess.DeviceID, sess.Kind, sess.Owner, sess.State,
 			sess.StartedAt.Format(time.RFC3339Nano),
 			sess.EndedAt.Format(time.RFC3339Nano),
@@ -205,10 +208,9 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) (int64, error) 
 		if err != nil {
 			return err
 		}
-		id, err = res.LastInsertId()
-		return err
+		return nil
 	})
-	return id, err
+	return sess.ID, err
 }
 
 // GetSession fetches one session record.

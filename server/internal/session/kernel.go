@@ -130,7 +130,7 @@ type Options struct {
 	TaskGraceWindow    time.Duration
 }
 
-// Option mutates Options.
+// Option mutates Options (used by tests for targeted overrides).
 type Option func(*Options)
 
 // WithIdleTimeout overrides the manual-session idle timeout.
@@ -169,9 +169,6 @@ func New(opts Options) *Kernel {
 	}
 }
 
-// openReq is the exported open request (executors construct it directly).
-type openReq = OpenRequest
-
 // OpenRequest asks the kernel to start a session.
 type OpenRequest struct {
 	User   string
@@ -185,7 +182,7 @@ type OpenRequest struct {
 // semantics, so one kind never satisfies the other; repeats of the same kind
 // return the active session; a different user is rejected busy with occupier
 // details).
-func (k *Kernel) Open(req openReq) OpenResult {
+func (k *Kernel) Open(req OpenRequest) OpenResult {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
@@ -407,6 +404,17 @@ func (k *Kernel) Seed(sessions ...Session) {
 		if s.State == StateActive {
 			k.devices[s.DeviceID] = &DeviceState{SessionID: s.ID, Kind: s.Kind, Owner: s.Owner, Since: s.StartedAt}
 		}
+	}
+}
+
+// SeedCounter advances the ID counter past n without registering any
+// session -- the startup sweep uses it so new IDs never collide with
+// persisted history rows.
+func (k *Kernel) SeedCounter(n SessionID) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if n > k.nextID {
+		k.nextID = n
 	}
 }
 

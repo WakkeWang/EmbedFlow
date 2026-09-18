@@ -172,6 +172,10 @@ func (h *coordinator) OnControl(c *transport.ClientConn, f *protocol.Frame) {
 		h.onSessionCtrl(c, body)
 	case *protocol.ConfirmFrame:
 		h.onConfirm(c, body)
+	case *protocol.DeviceStatusFrame:
+		// Requirement 3.5 dual-layer detection: the client reports COM
+		// errors (cable pulled, port seized) explicitly. Surface loudly.
+		slog.Error("serial client port error", "user", c.User(), "port", body.Port, "err", body.Error)
 	default:
 		slog.Warn("unhandled control frame", "type", f.Type, "user", c.User())
 	}
@@ -430,6 +434,18 @@ func (h *coordinator) runExpect(c *transport.ClientConn, deviceID, ruleID int64)
 		Steps:         steps,
 		DefaultWait:   15 * time.Second,
 		DefaultOnFail: expect.FailAbort,
+		// Live progress (issue #8, DS-3A): each step start pushes a running
+		// frame so the terminal UI's progress bar and abort button appear.
+		OnStep: func(index, total int) {
+			desc := describeStep(steps[index])
+			_ = c.Send(protocol.Frame{Type: protocol.FrameExpectProgress, Body: &protocol.ExpectProgressFrame{
+				SessionID: sid,
+				StepIndex: index,
+				StepTotal: total,
+				StepDesc:  desc,
+				Phase:     "running",
+			}})
+		},
 	}
 	runner := expect.New(cfg, enginePort)
 	h.mu.Lock()
@@ -465,6 +481,21 @@ func (h *coordinator) runExpect(c *transport.ClientConn, deviceID, ruleID int64)
 			}
 		}
 	}()
+}
+
+// describeStep renders a step for progress display (issue #8: "is it
+// waiting, or stuck").
+func describeStep(s expect.Step) string {
+	switch {
+	case s.Delay > 0:
+		return fmt.Sprintf("delay %s", s.Delay)
+	case s.Await != "":
+		return fmt.Sprintf("await %q", s.Await)
+	case s.Send != "":
+		return "send"
+	default:
+		return "step"
+	}
 }
 
 // abortExpect stops a running sequence (requirement 3.6: the operator's
@@ -546,10 +577,30 @@ func (h *coordinator) OnBinary(c *transport.ClientConn, data []byte) {
 		}
 		return
 	}
-	// Browser owner keystrokes: pure passthrough to the device's client.
+	// Browser owner keystrokes: input gating first (CEO-17A -- the UI hint
+	// alone must not be the only gate), then pure passthrough to the
+	// device's client. Any input also resets the manual idle timer
+	// (decision 11A: "any input resets the timer").
 	if !st.readonly {
+		sess, ok := h.kernel.Session(session.SessionID(st.sessionID))
+		if !ok || sess.State != session.StateActive {
+			return // session already ended: no device input
+		}
+		if h.expectRunActive(st.sessionID) {
+			return // an expect run owns the device input stream
+		}
+		h.kernel.UserInput(session.SessionID(st.sessionID), time.Now())
 		h.sendToDevice(st.sessionID, data)
 	}
+}
+
+// expectRunActive reports whether an expect sequence is running for the
+// session (its keystrokes must not interleave with automatic sends).
+func (h *coordinator) expectRunActive(sessionID int64) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	runner := h.expectRuns[sessionID]
+	return runner != nil && !runner.Done()
 }
 
 // writeLog appends to a session's logger.
@@ -620,6 +671,11 @@ func (h *coordinator) tick(now time.Time) {
 }
 
 func (h *coordinator) sweepStartup() error {
+	// Seed the kernel counter from the highest persisted ID (not just active
+	// rows) so new session IDs never collide with finished history.
+	if max, err := h.store.MaxSessionID(context.Background()); err == nil && max > 0 {
+		h.kernel.SeedCounter(session.SessionID(max))
+	}
 	actives, err := h.store.ActiveSessions(context.Background())
 	if err != nil {
 		return err

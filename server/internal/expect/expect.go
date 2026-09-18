@@ -63,6 +63,9 @@ type Config struct {
 	Steps         []Step
 	DefaultWait   time.Duration
 	DefaultOnFail OnFail
+	// OnStep, when set, fires as each step starts: (index, total). Live
+	// progress for the terminal UI (issue #8, DS-3A).
+	OnStep func(index, total int)
 }
 
 // Result reports how the sequence ended.
@@ -90,6 +93,9 @@ type Runner struct {
 	port  serialport.Port
 	abort chan struct{}
 
+	doneMu sync.Mutex
+	done   bool
+
 	outMu sync.Mutex
 	out   []byte // device output since the current await began
 
@@ -109,11 +115,23 @@ func New(cfg Config, port serialport.Port) *Runner {
 func (r *Runner) Run() *Result {
 	res := r.exec()
 	r.stopRead()
+	r.doneMu.Lock()
+	r.done = true
+	r.doneMu.Unlock()
 	return res
 }
 
 // Abort stops the sequence at the next check.
 func (r *Runner) Abort() { close(r.abort) }
+
+// Done reports whether the sequence has finished running (result returned).
+// Input gating uses it: while a run is live, keystrokes must not interleave
+// with automatic sends (CEO-17A).
+func (r *Runner) Done() bool {
+	r.doneMu.Lock()
+	defer r.doneMu.Unlock()
+	return r.done
+}
 
 func (r *Runner) exec() *Result {
 	readErr := make(chan error, 1)
@@ -127,6 +145,9 @@ func (r *Runner) exec() *Result {
 		case <-r.abort:
 			return &Result{StepIndex: i, Detail: "aborted", Aborted: true}
 		default:
+		}
+		if r.cfg.OnStep != nil {
+			r.cfg.OnStep(i, len(r.cfg.Steps))
 		}
 
 		// Pure delay step (CEO-13A: wait windows).

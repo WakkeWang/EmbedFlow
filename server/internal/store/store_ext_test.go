@@ -111,7 +111,7 @@ func TestConfirmations_InsertAndResolve(t *testing.T) {
 	s := openTestStore2(t)
 	ctx := context.Background()
 	devID, _ := s.CreateDevice(ctx, "dev", "proj")
-	sessID, _ := s.CreateSession(ctx, Session{DeviceID: devID, Kind: "manual", Owner: "a", State: "active", StartedAt: time.Now()})
+	sessID, _ := s.CreateSession(ctx, Session{ID: 100, DeviceID: devID, Kind: "manual", Owner: "a", State: "active", StartedAt: time.Now()})
 
 	cid, err := s.InsertConfirmation(ctx, sessID, "LED on?")
 	if err != nil {
@@ -137,8 +137,8 @@ func TestSessionHistory_ForDevice(t *testing.T) {
 	devID, _ := s.CreateDevice(ctx, "dev", "proj")
 	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
 
-	id1, _ := s.CreateSession(ctx, Session{DeviceID: devID, Kind: "manual", Owner: "a", State: "closed", StartedAt: now})
-	id2, _ := s.CreateSession(ctx, Session{DeviceID: devID, Kind: "task", Owner: "b", State: "failed", StartedAt: now.Add(time.Hour)})
+	id1, _ := s.CreateSession(ctx, Session{ID: 1, DeviceID: devID, Kind: "manual", Owner: "a", State: "closed", StartedAt: now})
+	id2, _ := s.CreateSession(ctx, Session{ID: 2, DeviceID: devID, Kind: "task", Owner: "b", State: "failed", StartedAt: now.Add(time.Hour)})
 
 	hist, err := s.SessionsForDevice(ctx, devID)
 	if err != nil {
@@ -158,7 +158,7 @@ func TestMarkLogIncomplete_Persists(t *testing.T) {
 	s := openTestStore2(t)
 	ctx := context.Background()
 	devID, _ := s.CreateDevice(ctx, "dev", "proj")
-	sessID, _ := s.CreateSession(ctx, Session{DeviceID: devID, Kind: "manual", Owner: "a", State: "active", StartedAt: time.Now()})
+	sessID, _ := s.CreateSession(ctx, Session{ID: 100, DeviceID: devID, Kind: "manual", Owner: "a", State: "active", StartedAt: time.Now()})
 
 	if err := s.MarkLogIncomplete(ctx, sessID); err != nil {
 		t.Fatalf("mark: %v", err)

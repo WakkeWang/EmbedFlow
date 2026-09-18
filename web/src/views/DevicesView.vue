@@ -56,11 +56,19 @@ async function createDevice() {
 
 function openSession(d: Device) {
 	if (d.busy && d.owner) {
-		// DS-2A: full occupier info in the popup.
+		// DS-2A: full occupier info in the popup; positive action = follow.
 		busyInfo.value = d
 		return
 	}
 	router.push(`/terminal/device-${d.id}`)
+}
+
+// CEO-15A: the second viewer follows read-only.
+function followSession() {
+	if (busyInfo.value) {
+		router.push(`/terminal/device-${busyInfo.value.id}?follow=1`)
+	}
+	busyInfo.value = null
 }
 
 function elapsed(d: Device) {
@@ -107,14 +115,15 @@ function elapsed(d: Device) {
 			</NGridItem>
 		</NGrid>
 
-		<!-- DS-2A: busy modal with occupier identity. -->
+		<!-- DS-2A: busy modal with occupier identity + read-only follow entry
+		     (CEO-15A: a second viewer can join instead of walking away). -->
 		<NModal
 			:show="busyInfo !== null"
 			preset="dialog"
 			:title="t('device.busy')"
-			:positive-text="t('common.confirm')"
+			:positive-text="t('terminal.readOnly')"
 			:negative-text="t('common.cancel')"
-			@positive-click="busyInfo = null"
+			@positive-click="followSession"
 			@negative-click="busyInfo = null"
 		>
 			<span v-if="busyInfo">

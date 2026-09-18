@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NSpace, NButton, NTag, NProgress, NModal, NSelect } from 'naive-ui'
+import { NSpace, NButton, NTag, NProgress, NModal, NSelect, NInput } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { WSClient } from '../api/ws'
-import { Frame, type SessionStateFrame, type ExpectProgressFrame } from '../api/frames'
+import { Frame, type SessionStateFrame, type ExpectProgressFrame, type ConfirmFrame } from '../api/frames'
 import { sessionApi, ruleApi } from '../api/http'
 
 const { t } = useI18n()
@@ -24,10 +24,22 @@ const readonly = ref(false)
 
 // Expect run progress (DS-3A): current step / total; the run entry selects
 // a rule (CEO-17A run button).
-const progress = ref<{ cur: number; total: number; phase: string } | null>(null)
+const progress = ref<{ cur: number; total: number; phase: string; desc?: string } | null>(null)
 const showAbortConfirm = ref(false)
 const rules = ref<{ id: number; name: string }[]>([])
 const selectedRule = ref<number | null>(null)
+
+// Human confirmation cards (issue #9): pending list with PASS/FAIL+note.
+interface ConfirmCard {
+	id: number
+	prompt: string
+	state: string
+	result?: string
+	note?: string
+}
+const confirmCards = ref<ConfirmCard[]>([])
+const confirmPrompt = ref('')
+const showConfirmDialog = ref(false)
 
 let term: Terminal | null = null
 let fit: FitAddon | null = null
@@ -81,7 +93,28 @@ onMounted(async () => {
 				}
 			} else if (f.type === Frame.ExpectProgress) {
 				const p = f.body as ExpectProgressFrame
-				progress.value = { cur: p.step_index + 1, total: p.step_total, phase: p.phase }
+				progress.value = { cur: p.step_index + 1, total: p.step_total, phase: p.phase, desc: p.step_desc }
+			} else if (f.type === Frame.Confirm) {
+				// Confirmation card state changes from the server.
+				const cf = f.body as ConfirmFrame
+				const i = confirmCards.value.findIndex((c) => c.id === cf.confirm_id)
+				if (i >= 0) {
+					confirmCards.value[i] = {
+						id: cf.confirm_id,
+						prompt: cf.prompt,
+						state: cf.state,
+						result: cf.result,
+						note: cf.note,
+					}
+				} else {
+					confirmCards.value.push({
+						id: cf.confirm_id,
+						prompt: cf.prompt,
+						state: cf.state,
+						result: cf.result,
+						note: cf.note,
+					})
+				}
 			}
 		},
 		onState: (s, a) => {
@@ -94,9 +127,12 @@ onMounted(async () => {
 	})
 	ws.connect()
 
-	// Open (or idempotently rejoin) our session on this device.
+	// Open (or idempotently rejoin) our session on this device; a busy
+	// device owned by someone else puts us in read-only follow (CEO-15A).
+	const followMode = route.query.follow === '1'
+	const command = followMode ? 'follow' : 'open'
 	const tryOpen = () => {
-		ws?.sendControl(Frame.SessionCtrl, { command: 'open', device_id: deviceID })
+		ws?.sendControl(Frame.SessionCtrl, { command, device_id: deviceID })
 	}
 	// Wait for the WS to be open before sending the open command.
 	const iv = setInterval(() => {
@@ -116,7 +152,6 @@ onMounted(async () => {
 		term?.write(`\r\n[rules load failed: ${e}]\r\n`)
 		rules.value = []
 	}
-	;(window as unknown as Record<string, unknown>).__efRules = rules.value
 
 	window.addEventListener('resize', onResize)
 })
@@ -180,15 +215,31 @@ function abortRun() {
 
 // Insert a human confirmation card (issue #9) via the REST path.
 async function insertConfirm() {
-	if (!sessionID.value) return
-	const prompt = window.prompt('Prompt (e.g. "LED on?")')
-	if (!prompt) return
+	if (!sessionID.value || !confirmPrompt.value.trim()) return
 	try {
-		await sessionApi.insertConfirm(sessionID.value, prompt)
-		term?.write(`\r\n[confirmation card created: ${prompt}]\r\n`)
+		const res = await sessionApi.insertConfirm(sessionID.value, confirmPrompt.value.trim())
+		confirmCards.value.push({
+			id: res.id,
+			prompt: confirmPrompt.value.trim(),
+			state: 'pending',
+		})
+		confirmPrompt.value = ''
+		showConfirmDialog.value = false
 	} catch (e) {
 		term?.write(`\r\n[confirm insert failed: ${e}]\r\n`)
 	}
+}
+
+// Resolve a card (issue #9: explicit PASS/FAIL + note, never auto-dismiss).
+function resolveCard(card: ConfirmCard, result: 'pass' | 'fail') {
+	ws?.sendControl(Frame.Confirm, {
+		session_id: sessionID.value,
+		confirm_id: card.id,
+		prompt: card.prompt,
+		state: 'resolved',
+		result,
+		note: '',
+	})
 }
 </script>
 
@@ -235,10 +286,32 @@ async function insertConfirm() {
 				<NButton size="small" type="primary" :disabled="!selectedRule" @click="runRule">
 					{{ t('expect.run') }}
 				</NButton>
-				<NButton size="small" @click="insertConfirm">+ Confirm</NButton>
+				<NButton size="small" @click="showConfirmDialog = true">+ {{ t('nav.expect') === 'expect rules' ? 'Confirm' : '确认卡' }}</NButton>
 				<NButton size="small" @click="closeSession">{{ t('terminal.closeSession') }}</NButton>
 			</NSpace>
 		</div>
+
+		<!-- Issue #9: pending confirmation cards beside the terminal. -->
+		<div v-if="confirmCards.length > 0" class="confirm-bar">
+			<div v-for="card in confirmCards" :key="card.id" class="confirm-card">
+				<span class="confirm-prompt">{{ card.prompt }}</span>
+				<NTag v-if="card.state === 'resolved'" size="small" :type="card.result === 'pass' ? 'success' : 'error'">
+					{{ card.result?.toUpperCase() }}
+				</NTag>
+				<template v-else>
+					<NButton size="tiny" type="success" @click="resolveCard(card, 'pass')">PASS</NButton>
+					<NButton size="tiny" type="error" @click="resolveCard(card, 'fail')">FAIL</NButton>
+				</template>
+			</div>
+		</div>
+
+		<NModal :show="showConfirmDialog" preset="dialog" :title="t('nav.expect') === 'expect rules' ? 'New confirmation card' : '新建确认卡'" :show-icon="false">
+			<NInput v-model:value="confirmPrompt" placeholder="e.g. LED on? / LED 是否亮" @keyup.enter="insertConfirm" />
+			<template #action>
+				<NButton @click="showConfirmDialog = false">{{ t('common.cancel') }}</NButton>
+				<NButton type="primary" @click="insertConfirm">{{ t('common.confirm') }}</NButton>
+			</template>
+		</NModal>
 
 		<!-- DS-2B: translucent overlay keeps received data visible underneath. -->
 		<div class="term-wrap">
@@ -301,5 +374,27 @@ async function insertConfirm() {
 }
 .mono {
 	font-family: 'JetBrains Mono', Consolas, monospace;
+}
+.confirm-bar {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+	padding: 6px 0;
+	flex: 0 0 auto;
+}
+.confirm-card {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 4px 10px;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	border-radius: 4px;
+	font-size: 13px;
+}
+.confirm-prompt {
+	max-width: 280px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 </style>
