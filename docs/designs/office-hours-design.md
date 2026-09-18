@@ -263,11 +263,11 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Surfaced by: Performance review 10A + 外部声音 #8
   - Files: `server/internal/store/`
   - Verify: 并发写压测（4 批次模拟并发）
-- [ ] **T8 (P3, human: ~1h / CC: ~15min)** — docs — 仓库公开前脱敏 pass：内网 IP（<server-lan-ip>）、真实路径（E:\、<local-path>\）、产品线名的脱敏决策与执行（决策 17A）
+- [x] **T8 (P3, human: ~1h / CC: ~15min)** — docs — 仓库公开前脱敏 pass：内网 IP（<server-lan-ip>）、真实路径（E:\、<local-path>\）、产品线名的脱敏决策与执行（决策 17A）
   - Surfaced by: 外部声音 #4（docs 含内网拓扑与真实路径）
   - Files: `docs/`, `CLAUDE.md`
   - Verify: gitleaks 扫描 + 人工检查 docs/ 无内网信息
-- [ ] **T9 (P3, human: ~2h / CC: ~30min)** — server — M3 前置 TODO：会话日志密码脱敏选项（决策 17A，M3 实现刷机时落地）
+- [x] **T9 (P3, human: ~2h / CC: ~30min)** — server — M3 前置 TODO：会话日志密码脱敏选项（决策 17A，M3 实现刷机时落地）
   - Surfaced by: 外部声音 #4（日志通道明文密码）
   - Files: `server/internal/sessionlog/`
   - Verify: 含密码的会话日志行脱敏显示
