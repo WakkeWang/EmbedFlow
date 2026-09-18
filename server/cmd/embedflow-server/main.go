@@ -24,6 +24,7 @@ import (
 	"github.com/WakkeWang/EmbedFlow/server/internal/sessionlog"
 	"github.com/WakkeWang/EmbedFlow/server/internal/store"
 	"github.com/WakkeWang/EmbedFlow/server/internal/transport"
+	"github.com/WakkeWang/EmbedFlow/server/internal/webui"
 )
 
 var version = "dev"
@@ -142,6 +143,11 @@ func (h *coordinator) mux(frontDir string) http.Handler {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
 	})
+	// Embedded SPA (single-binary distribution); in dev the Vite proxy
+	// serves the UI instead.
+	if ui, err := webui.Handler(); err == nil {
+		mux.Handle("/", ui)
+	}
 	return mux
 }
 
