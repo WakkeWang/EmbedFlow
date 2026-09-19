@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -352,5 +353,113 @@ func TestBuild_CanceledTmpRemovedImmediately(t *testing.T) {
 		if strings.HasPrefix(ent.Name(), "build-") {
 			t.Fatalf("canceled build must remove its tmp dir at once (requirement 2.5), kept: %s", ent.Name())
 		}
+	}
+}
+
+func TestBuild_LocalBranch(t *testing.T) {
+	repo := newGitRepo(t)
+	// A second branch whose build emits a different payload.
+	git(t, repo.dir, "checkout", "-b", "feature")
+	script := "build.sh"
+	payload := "payload-from-feature"
+	if runtime.GOOS == "windows" {
+		script = "build.bat"
+	}
+	full := filepath.Join(repo.dir, script)
+	src, err := os.ReadFile(full)
+	if err != nil {
+		t.Fatalf("read script: %v", err)
+	}
+	if err := os.WriteFile(full, bytes.ReplaceAll(src, []byte("payload-of-bootfw"), []byte(payload)), 0o755); err != nil {
+		t.Fatalf("patch script: %v", err)
+	}
+	git(t, repo.dir, "commit", "-am", "feature payload")
+	git(t, repo.dir, "checkout", "main")
+
+	e, _ := newExecutor(t)
+	item := repo.item(t, "bootfw*.bin")
+	item.GitBranch = "feature"
+
+	var lines []string
+	e.Notify = func(record int64, phase, line string) { lines = append(lines, phase+"|"+line) }
+	res := e.Run(112, item, "sha256")
+	if !res.OK {
+		t.Fatalf("branch build failed: %s\nlog:\n%s", res.Detail, strings.Join(lines, "\n"))
+	}
+	art, err := os.ReadFile(filepath.Join(e.DataDir, "artifacts", "112", "bootfw-p0133.bin"))
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	if !strings.HasPrefix(string(art), payload) {
+		t.Fatalf("artifact = %q, want payload from feature branch", art)
+	}
+}
+
+func TestBuild_LocalPinnedCommit(t *testing.T) {
+	repo := newGitRepo(t)
+	// Remember the initial commit, then add a second one.
+	out, err := exec.Command("git", "-C", repo.dir, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-parse: %v: %s", err, out)
+	}
+	pinned := strings.TrimSpace(string(out))
+	script := "build.sh"
+	if runtime.GOOS == "windows" {
+		script = "build.bat"
+	}
+	if err := os.WriteFile(filepath.Join(repo.dir, script), []byte("@echo off\r\necho payload-v2> bootfw-p0133.bin\r\n"), 0o755); err != nil {
+		t.Fatalf("rewrite script: %v", err)
+	}
+	git(t, repo.dir, "commit", "-am", "v2")
+
+	e, _ := newExecutor(t)
+	item := repo.item(t, "bootfw*.bin")
+	item.GitCommit = pinned
+
+	var lines []string
+	e.Notify = func(record int64, phase, line string) { lines = append(lines, phase+"|"+line) }
+	res := e.Run(113, item, "sha256")
+	if !res.OK {
+		t.Fatalf("pinned build failed: %s\nlog:\n%s", res.Detail, strings.Join(lines, "\n"))
+	}
+	if res.CommitSHA != pinned {
+		t.Fatalf("CommitSHA = %q, want pinned %q", res.CommitSHA, pinned)
+	}
+	art, err := os.ReadFile(filepath.Join(e.DataDir, "artifacts", "113", "bootfw-p0133.bin"))
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	if !strings.HasPrefix(string(art), "payload-of-bootfw") {
+		t.Fatalf("artifact = %q, want the pinned (v1) payload", art)
+	}
+}
+
+func TestBuild_LocalPinnedCommitDirtyOK(t *testing.T) {
+	repo := newGitRepo(t)
+	out, err := exec.Command("git", "-C", repo.dir, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-parse: %v: %s", err, out)
+	}
+	pinned := strings.TrimSpace(string(out))
+	// Dirty the worktree: without a pin this refuses to build
+	// (TestBuild_DirtyRefused); with a pin the commit object is the source
+	// of truth, so the build must proceed.
+	if err := os.WriteFile(filepath.Join(repo.dir, "untracked.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("dirty: %v", err)
+	}
+
+	e, _ := newExecutor(t)
+	item := repo.item(t, "*.bin")
+	item.GitCommit = pinned
+
+	var lines []string
+	e.Notify = func(record int64, phase, line string) { lines = append(lines, phase+"|"+line) }
+	res := e.Run(114, item, "sha256")
+	if !res.OK {
+		t.Fatalf("pinned build with dirty worktree must succeed: %s\nlog:\n%s", res.Detail, strings.Join(lines, "\n"))
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "commit pinned") {
+		t.Fatalf("log must note the skipped dirty gate, got:\n%s", joined)
 	}
 }

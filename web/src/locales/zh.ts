@@ -99,6 +99,7 @@ export const zh = {
 		commit: 'commit（可选）',
 		checkLatest: '拉取远端最新',
 		checkLatestHint: '构建前核对分支/commit 并拉取远端最新',
+		localCommitHint: '填写后按该 commit 构建，工作区 dirty 检查跳过（构建内容取自 commit 对象）',
 		localPath: '服务器本地目录（git 仓库）',
 		build: '构建',
 		command: '构建命令',

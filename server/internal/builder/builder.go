@@ -300,13 +300,20 @@ func (e *Executor) prepareSource(recordID int64, item store.BuildItem, tmpDir st
 			log.line(PhaseClone, "local path is not a git repository: "+item.LocalPath)
 			return "", &Result{Detail: "local source is not a git repository: " + item.LocalPath}
 		}
-		if clean, err := gitClean(item.LocalPath); err != nil {
+		// A pinned commit builds the commit object itself, so the worktree
+		// state is irrelevant -- the dirty gate (requirement 2.2, whose
+		// premise is "output must correspond to a commit") does not apply.
+		pinned := strings.TrimSpace(item.GitCommit)
+		if pinned != "" {
+			log.line(PhaseDirty, "commit pinned ("+pinned+"): building the commit object, worktree dirty state not checked")
+		} else if clean, err := gitClean(item.LocalPath); err != nil {
 			return "", &Result{Detail: "dirty check: " + err.Error()}
 		} else if !clean {
 			log.line(PhaseDirty, "source worktree is dirty -- refusing to build (requirement 2.2)")
 			return "", &Result{Detail: "dirty worktree: commit or stash before building"}
+		} else {
+			log.line(PhaseDirty, "source worktree clean")
 		}
-		log.line(PhaseDirty, "source worktree clean")
 		// git clone --local hardlinks objects: fast, cheap (requirement 2.2).
 		buildDir := filepath.Join(tmpDir, "src")
 		args := []string{"clone", "--local"}
@@ -316,6 +323,17 @@ func (e *Executor) prepareSource(recordID int64, item store.BuildItem, tmpDir st
 		args = append(args, item.LocalPath, buildDir)
 		if out, err := runGitLogged(log, PhaseClone, "", args...); err != nil {
 			return "", &Result{Detail: "local clone: " + err.Error() + ": " + out}
+		}
+		// Pinned commit (requirement 2.1, local flavor): the local clone is
+		// full, so the object is already there -- plain detach checkout.
+		if pinned != "" {
+			if out, err := runGitLogged(log, PhaseVerify, buildDir, "cat-file", "-e", pinned+"^{commit}"); err != nil {
+				return "", &Result{Detail: "commit not found in repo: " + pinned + ": " + out}
+			}
+			if out, err := runGitLogged(log, PhaseClone, buildDir, "checkout", "--detach", pinned); err != nil {
+				return "", &Result{Detail: "checkout commit " + pinned + ": " + err.Error() + ": " + out}
+			}
+			log.line(PhaseVerify, "pinned commit checked out: "+pinned)
 		}
 		return buildDir, nil
 

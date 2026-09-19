@@ -42,7 +42,7 @@ function logout() {
 
 <template>
 	<!-- Full-height sidebar rail (user feedback: the rail owns one column). -->
-	<NLayout position="absolute" class="root" :class="{ dark: darkMode.isDark }">
+	<NLayout position="absolute" class="root" :class="{ dark: darkMode.isDark }" has-sider>
 		<NLayoutSider bordered class="sider">
 			<div class="brand">
 				<div class="brand-mark">EF</div>

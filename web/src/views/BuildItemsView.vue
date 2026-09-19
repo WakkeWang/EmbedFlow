@@ -245,16 +245,26 @@ const sourceOptions = [
 					<template v-if="editor.source_type === 'git'">
 						<label>git URL</label>
 						<input v-model="editor.git_url" class="n-input mono" spellcheck="false" />
-						<label>{{ t('build.branch') }}</label>
-						<input v-model="editor.git_branch" class="n-input mono" spellcheck="false" />
-						<label>{{ t('build.commit') }}</label>
-						<input v-model="editor.git_commit" class="n-input mono" spellcheck="false" />
-						<label>{{ t('build.checkLatest') }}</label>
-						<NCheckbox v-model:checked="editor.check_latest">{{ t('build.checkLatestHint') }}</NCheckbox>
 					</template>
 					<template v-else>
 						<label>{{ t('build.localPath') }}</label>
 						<input v-model="editor.local_path" class="n-input mono" spellcheck="false" />
+					</template>
+
+					<!-- Branch/commit apply to both source kinds (local clone
+					     takes --branch; a pinned commit builds the commit object,
+					     skipping the worktree dirty gate). -->
+					<label>{{ t('build.branch') }}</label>
+					<input v-model="editor.git_branch" class="n-input mono" spellcheck="false" />
+					<label>{{ t('build.commit') }}</label>
+					<div>
+						<input v-model="editor.git_commit" class="n-input mono" spellcheck="false" />
+						<div v-if="editor.source_type === 'local'" class="hint">{{ t('build.localCommitHint') }}</div>
+					</div>
+
+					<template v-if="editor.source_type === 'git'">
+						<label>{{ t('build.checkLatest') }}</label>
+						<NCheckbox v-model:checked="editor.check_latest">{{ t('build.checkLatestHint') }}</NCheckbox>
 					</template>
 				</div>
 			</NCard>

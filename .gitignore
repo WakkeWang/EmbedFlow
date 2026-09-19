@@ -15,3 +15,4 @@ data/
 
 # 本地构建产物（服务器二进制，含交叉编译拷贝件）
 /embedflow-server*
+/server/embedflow-server*
