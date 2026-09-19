@@ -42,3 +42,17 @@ func TestEnsure_Idempotent(t *testing.T) {
 		t.Fatalf("second: %v", err)
 	}
 }
+
+func TestBuildPaths_Layout(t *testing.T) {
+	got := BuildLog("data", 7)
+	want := filepath.Join("data", "builds", "7", "log.txt")
+	if got != want {
+		t.Fatalf("BuildLog = %q, want %q", got, want)
+	}
+	if a, b := ArtifactDir("data", 7), filepath.Join("data", "artifacts", "7"); a != b {
+		t.Fatalf("ArtifactDir = %q, want %q", a, b)
+	}
+	if a, b := BuildTmp("tmproot", 7), filepath.Join("tmproot", "build-7"); a != b {
+		t.Fatalf("BuildTmp = %q, want %q", a, b)
+	}
+}
