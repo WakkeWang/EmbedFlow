@@ -434,12 +434,25 @@ func (h *coordinator) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errs[0].Error())
 		return
 	}
-	id, err := h.store.CreateExpectRule(r.Context(), req.Name, string(req.Steps))
+	id, err := h.store.CreateExpectRule(r.Context(), h.ruleProjectID(), req.Name, string(req.Steps))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int64{"id": id})
+}
+
+// ruleProjectID is the project flash rules attach to when created through
+// the M1 global editor (pre-M3 surface): the currently selected project
+// comes from the client; without one, rules land in the demo project so
+// they remain visible in the config hub.
+func (h *coordinator) ruleProjectID() int64 {
+	if p := h.store; p != nil {
+		if projects, err := p.ListProjects(context.Background()); err == nil && len(projects) > 0 {
+			return projects[0].ID
+		}
+	}
+	return h.demoProjectID()
 }
 
 func (h *coordinator) handleGetRule(w http.ResponseWriter, r *http.Request) {

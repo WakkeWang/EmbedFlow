@@ -88,7 +88,7 @@ func (h *coordinator) startDemoDevice() error {
 			return nil
 		}
 	}
-	ruleID, err := h.store.CreateExpectRule(context.Background(), "demo-flash", string(raw))
+	ruleID, err := h.store.CreateExpectRule(context.Background(), h.demoProjectID(), "demo-flash", string(raw))
 	if err != nil {
 		return err
 	}

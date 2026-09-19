@@ -78,7 +78,8 @@ func TestExpectRules_CRUD(t *testing.T) {
 	s := openTestStore2(t)
 	ctx := context.Background()
 
-	id, err := s.CreateExpectRule(ctx, "demo-flash-cfg", `[{"await":"Login:","send":"root\r"}]`)
+	pid, _ := s.CreateProject(ctx, "P-rules", "")
+	id, err := s.CreateExpectRule(ctx, pid, "demo-flash-cfg", `[{"await":"Login:","send":"root\r"}]`)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

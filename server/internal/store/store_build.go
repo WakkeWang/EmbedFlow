@@ -13,6 +13,8 @@ import (
 // BuildItem is one buildable unit inside a project (CONTEXT.md: 构建项目).
 // SourceType picks which source fields apply; PrereqGroups holds prerequisite
 // groupings -- group-internal OR, group-to-group AND (requirement 2.1).
+// Persistence rides config_objects (kind=build_item); this struct stays the
+// API/exec surface.
 type BuildItem struct {
 	ID          int64    `json:"id"`
 	ProjectID   int64    `json:"project_id"`
@@ -82,123 +84,9 @@ func scanBuildItem(sc interface{ Scan(dest ...any) error }) (BuildItem, error) {
 	return it, nil
 }
 
-// CreateBuildItem inserts an item, returning its id.
-func (s *Store) CreateBuildItem(ctx context.Context, it BuildItem) (int64, error) {
-	var id int64
-	err := s.enqueue(ctx, func() error {
-		res, err := s.db.ExecContext(ctx,
-			"INSERT INTO build_items (project_id, name, source_type, git_url, git_branch, git_commit, check_latest, local_path, command, artifacts_json, timeout_sec, version_cmd, prereq_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			it.ProjectID, it.Name, it.SourceType, it.GitURL, it.GitBranch, it.GitCommit,
-			boolToInt(it.CheckLatest), it.LocalPath, it.Command, encodeJSONStrings(it.Artifacts),
-			it.TimeoutSec, it.VersionCmd, it.PrereqJSON)
-		if err != nil {
-			return err
-		}
-		id, err = res.LastInsertId()
-		return err
-	})
-	return id, err
-}
-
-// GetBuildItem fetches one item.
-func (s *Store) GetBuildItem(ctx context.Context, id int64) (BuildItem, error) {
-	row := s.db.QueryRowContext(ctx, "SELECT "+buildItemCols+" FROM build_items WHERE id = ?", id)
-	it, err := scanBuildItem(row)
-	if err != nil {
-		return BuildItem{}, fmt.Errorf("store: get build item %d: %w", id, err)
-	}
-	return it, nil
-}
-
-// ListBuildItemsByProject returns a project's items in insertion order.
-// Served by idx_build_items_project.
-func (s *Store) ListBuildItemsByProject(ctx context.Context, projectID int64) ([]BuildItem, error) {
-	rows, err := s.db.QueryContext(ctx,
-		"SELECT "+buildItemCols+" FROM build_items WHERE project_id = ? ORDER BY id", projectID)
-	if err != nil {
-		return nil, fmt.Errorf("store: list build items: %w", err)
-	}
-	defer rows.Close()
-	var out []BuildItem
-	for rows.Next() {
-		it, err := scanBuildItem(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, it)
-	}
-	return out, rows.Err()
-}
-
-// ListAllBuildItems returns every item across projects (batch-planning
-// universe: prerequisites may reference cross-project ids, requirement 2.1).
-func (s *Store) ListAllBuildItems(ctx context.Context) ([]BuildItem, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+buildItemCols+" FROM build_items ORDER BY id")
-	if err != nil {
-		return nil, fmt.Errorf("store: list all build items: %w", err)
-	}
-	defer rows.Close()
-	var out []BuildItem
-	for rows.Next() {
-		it, err := scanBuildItem(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, it)
-	}
-	return out, rows.Err()
-}
-
-// UpdateBuildItem overwrites the editable fields.
-func (s *Store) UpdateBuildItem(ctx context.Context, it BuildItem) error {
-	return s.enqueue(ctx, func() error {
-		_, err := s.db.ExecContext(ctx,
-			"UPDATE build_items SET name = ?, source_type = ?, git_url = ?, git_branch = ?, git_commit = ?, check_latest = ?, local_path = ?, command = ?, artifacts_json = ?, timeout_sec = ?, version_cmd = ?, prereq_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
-			it.Name, it.SourceType, it.GitURL, it.GitBranch, it.GitCommit,
-			boolToInt(it.CheckLatest), it.LocalPath, it.Command, encodeJSONStrings(it.Artifacts),
-			it.TimeoutSec, it.VersionCmd, it.PrereqJSON, it.ID)
-		return err
-	})
-}
-
-// DeleteBuildItem removes an item. Existing build records keep item_id for
-// history display; the name is denormalized into them at record creation.
-func (s *Store) DeleteBuildItem(ctx context.Context, id int64) error {
-	return s.enqueue(ctx, func() error {
-		_, err := s.db.ExecContext(ctx, "DELETE FROM build_items WHERE id = ?", id)
-		return err
-	})
-}
-
-// ListBuildItemsByIDs fetches a specific set (batch planning input).
-func (s *Store) ListBuildItemsByIDs(ctx context.Context, ids []int64) ([]BuildItem, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	q := "SELECT " + buildItemCols + " FROM build_items WHERE id IN ("
-	args := make([]any, 0, len(ids))
-	for i, id := range ids {
-		if i > 0 {
-			q += ","
-		}
-		q += "?"
-		args = append(args, id)
-	}
-	rows, err := s.db.QueryContext(ctx, q+")", args...)
-	if err != nil {
-		return nil, fmt.Errorf("store: list build items by ids: %w", err)
-	}
-	defer rows.Close()
-	var out []BuildItem
-	for rows.Next() {
-		it, err := scanBuildItem(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, it)
-	}
-	return out, rows.Err()
-}
+// Build-item CRUD (CreateBuildItem / GetBuildItem / ListBuildItems* /
+// UpdateBuildItem / DeleteBuildItem) lives in store_config.go -- build items
+// ride the unified config_objects table (kind=build_item).
 
 // --- batches ---
 

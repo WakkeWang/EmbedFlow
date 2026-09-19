@@ -70,14 +70,8 @@ func (s *Store) DeleteProject(ctx context.Context, id int64) error {
 	})
 }
 
-// ExpectRule is a stored expect sequence (issue #7): team-shared,
-// reusable, reviewable configuration.
-type ExpectRule struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	StepsJSON string    `json:"steps_json"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
+// ExpectRule lives in store.go (the M1 view of a flash rule config object);
+// its CRUD rides config_objects -- see store_config.go.
 
 // Confirmation is one human confirmation card (issue #9).
 type Confirmation struct {
@@ -154,72 +148,9 @@ func (s *Store) DeleteDevice(ctx context.Context, id int64) error {
 	})
 }
 
-// CreateExpectRule stores a rule; steps_json carries the serialized steps.
-func (s *Store) CreateExpectRule(ctx context.Context, name, stepsJSON string) (int64, error) {
-	var id int64
-	err := s.enqueue(ctx, func() error {
-		res, err := s.db.ExecContext(ctx,
-			"INSERT INTO expect_rules (name, steps_json) VALUES (?, ?)", name, stepsJSON)
-		if err != nil {
-			return err
-		}
-		id, err = res.LastInsertId()
-		return err
-	})
-	return id, err
-}
-
-// GetExpectRule fetches one rule.
-func (s *Store) GetExpectRule(ctx context.Context, id int64) (ExpectRule, error) {
-	var r ExpectRule
-	var updated string
-	err := s.db.QueryRowContext(ctx,
-		"SELECT id, name, steps_json, updated_at FROM expect_rules WHERE id = ?", id).
-		Scan(&r.ID, &r.Name, &r.StepsJSON, &updated)
-	if err != nil {
-		return ExpectRule{}, fmt.Errorf("store: get rule %d: %w", id, err)
-	}
-	r.UpdatedAt = parseTime(updated)
-	return r, nil
-}
-
-// UpdateExpectRule overwrites name and steps.
-func (s *Store) UpdateExpectRule(ctx context.Context, r ExpectRule) error {
-	return s.enqueue(ctx, func() error {
-		_, err := s.db.ExecContext(ctx,
-			"UPDATE expect_rules SET name = ?, steps_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
-			r.Name, r.StepsJSON, r.ID)
-		return err
-	})
-}
-
-// ListExpectRules returns all rules in insertion order.
-func (s *Store) ListExpectRules(ctx context.Context) ([]ExpectRule, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id, name, steps_json, updated_at FROM expect_rules ORDER BY id")
-	if err != nil {
-		return nil, fmt.Errorf("store: list rules: %w", err)
-	}
-	defer rows.Close()
-	var out []ExpectRule
-	for rows.Next() {
-		var r ExpectRule
-		var updated string
-		if err := rows.Scan(&r.ID, &r.Name, &r.StepsJSON, &updated); err != nil {
-			return nil, err
-		}
-		r.UpdatedAt = parseTime(updated)
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}
-
-// DeleteExpectRule removes a rule (the editor's delete button).
-func (s *Store) DeleteExpectRule(ctx context.Context, id int64) error {
-	return s.enqueue(ctx, func() error {
-		_, err := s.db.ExecContext(ctx, "DELETE FROM expect_rules WHERE id = ?", id)
-		return err
-	})
-}
+// ExpectRule CRUD (CreateExpectRule / GetExpectRule / UpdateExpectRule /
+// ListExpectRules / DeleteExpectRule) lives in store_config.go -- the rules
+// ride the unified config_objects table (kind=flash_rule).
 
 // InsertConfirmation adds a pending confirmation card to a session.
 func (s *Store) InsertConfirmation(ctx context.Context, sessionID int64, prompt string) (int64, error) {

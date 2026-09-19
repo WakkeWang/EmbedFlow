@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -24,6 +25,15 @@ type Session struct {
 	EndedAt       time.Time `json:"ended_at"`
 	EndReason     string    `json:"end_reason"`
 	LogIncomplete bool      `json:"log_incomplete"`
+}
+
+// ExpectRule is the M1 view of a flash rule (now stored as a config
+// object, kind=flash_rule -- see store_config.go).
+type ExpectRule struct {
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	StepsJSON string    `json:"steps_json"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Device is a registered target machine (CONTEXT.md: 设备).
@@ -71,7 +81,7 @@ func Open(path string) (*Store, error) {
 }
 
 // migrate creates tables and indexes in one shot (CEO-8A: indexes are born
-// with the tables).
+// with the tables), then runs the data migrations.
 func (s *Store) migrate() error {
 	const ddl = `
 CREATE TABLE IF NOT EXISTS devices (
@@ -111,12 +121,17 @@ CREATE TABLE IF NOT EXISTS users (
 	created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
-CREATE TABLE IF NOT EXISTS expect_rules (
-	id         INTEGER PRIMARY KEY AUTOINCREMENT,
-	name       TEXT NOT NULL,
-	steps_json TEXT NOT NULL,
-	updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+CREATE TABLE IF NOT EXISTS config_objects (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	project_id   INTEGER NOT NULL REFERENCES projects(id),
+	kind         TEXT NOT NULL CHECK (kind IN ('build_item','deploy_rule','flash_rule','test_unit','test_item','test_suite','release_rule')),
+	name         TEXT NOT NULL,
+	payload_json TEXT NOT NULL DEFAULT '{}',
+	created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+	updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
+CREATE INDEX IF NOT EXISTS idx_config_objects_project_kind ON config_objects(project_id, kind);
 
 CREATE TABLE IF NOT EXISTS confirmations (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,27 +145,6 @@ CREATE TABLE IF NOT EXISTS confirmations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_confirmations_session ON confirmations(session_id);
-
-CREATE TABLE IF NOT EXISTS build_items (
-	id           INTEGER PRIMARY KEY AUTOINCREMENT,
-	project_id   INTEGER NOT NULL REFERENCES projects(id),
-	name         TEXT NOT NULL,
-	source_type  TEXT NOT NULL CHECK (source_type IN ('git','local')),
-	git_url      TEXT NOT NULL DEFAULT '',
-	git_branch   TEXT NOT NULL DEFAULT '',
-	git_commit   TEXT NOT NULL DEFAULT '',
-	check_latest INTEGER NOT NULL DEFAULT 0,
-	local_path   TEXT NOT NULL DEFAULT '',
-	command      TEXT NOT NULL,
-	artifacts_json TEXT NOT NULL DEFAULT '[]',
-	timeout_sec  INTEGER NOT NULL DEFAULT 0,
-	version_cmd  TEXT NOT NULL DEFAULT '',
-	prereq_json  TEXT NOT NULL DEFAULT '[]',
-	created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-	updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_build_items_project ON build_items(project_id);
 
 CREATE TABLE IF NOT EXISTS batches (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -168,7 +162,7 @@ CREATE INDEX IF NOT EXISTS idx_batches_project ON batches(project_id);
 CREATE TABLE IF NOT EXISTS build_records (
 	id           INTEGER PRIMARY KEY AUTOINCREMENT,
 	batch_id     INTEGER NOT NULL REFERENCES batches(id),
-	item_id      INTEGER NOT NULL REFERENCES build_items(id),
+	item_id      INTEGER NOT NULL,
 	project_id   INTEGER NOT NULL,
 	status       TEXT NOT NULL CHECK (status IN ('pending','building','succeeded','failed','canceled','skipped')),
 	commit_sha   TEXT NOT NULL DEFAULT '',
@@ -201,7 +195,139 @@ CREATE TABLE IF NOT EXISTS settings (
 	if err != nil {
 		return fmt.Errorf("store: migrate: %w", err)
 	}
+	// Data migrations: legacy tables into config_objects. The legacy
+	// build_items / expect_rules tables stay as untouched backups after the
+	// move (no drop -- a rollback-friendly copy).
+	if err := s.migrateLegacyTables(); err != nil {
+		return fmt.Errorf("store: legacy migration: %w", err)
+	}
 	return nil
+}
+
+// migrateLegacyTables moves rows from the pre-M3 build_items / expect_rules
+// tables into config_objects. Runs once per database (settings marker); the
+// legacy tables stay as untouched backups after the move (no drop -- a
+// rollback-friendly copy).
+func (s *Store) migrateLegacyTables() error {
+	// One-shot guard: direct SQL (migrate runs before the writer loop).
+	var done int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM settings WHERE key = 'legacy_migrated_v1'").Scan(&done); err == nil && done > 0 {
+		return nil
+	}
+
+	// build_items -> config_objects (kind=build_item, ids preserved: batch
+	// history's items_json and build_records.item_id reference them).
+	has, err := s.tableExists("build_items")
+	if err != nil {
+		return err
+	}
+	if has {
+		rows, err := s.db.Query("SELECT id, project_id, name, source_type, git_url, git_branch, git_commit, check_latest, local_path, command, artifacts_json, timeout_sec, version_cmd, prereq_json FROM build_items")
+		if err != nil {
+			return err
+		}
+		type itemRow struct {
+			id                                int64
+			projectID                         int64
+			name, sourceType, gitURL          string
+			gitBranch, gitCommit              string
+			checkLatest                       bool
+			localPath, command, artifactsJSON string
+			timeoutSec                        int
+			versionCmd, prereqJSON            string
+		}
+		var legacyItems []itemRow
+		for rows.Next() {
+			var r itemRow
+			if err := rows.Scan(&r.id, &r.projectID, &r.name, &r.sourceType, &r.gitURL, &r.gitBranch,
+				&r.gitCommit, &r.checkLatest, &r.localPath, &r.command, &r.artifactsJSON,
+				&r.timeoutSec, &r.versionCmd, &r.prereqJSON); err == nil {
+				legacyItems = append(legacyItems, r)
+			}
+		}
+		rows.Close()
+		for _, r := range legacyItems {
+			payload, _ := json.Marshal(BuildItemPayload{
+				SourceType: r.sourceType, GitURL: r.gitURL, GitBranch: r.gitBranch,
+				GitCommit: r.gitCommit, CheckLatest: r.checkLatest, LocalPath: r.localPath,
+				Command: r.command, Artifacts: decodeJSONStrings(r.artifactsJSON),
+				TimeoutSec: r.timeoutSec, VersionCmd: r.versionCmd, PrereqJSON: r.prereqJSON,
+			})
+			if _, err := s.db.Exec(
+				"INSERT OR IGNORE INTO config_objects (id, project_id, kind, name, payload_json) VALUES (?, ?, ?, ?, ?)",
+				r.id, r.projectID, KindBuildItem, r.name, string(payload)); err != nil {
+				return err
+			}
+		}
+	}
+
+	// expect_rules -> config_objects (kind=flash_rule, attached to the demo
+	// project; M1 rules were global, demo is their de-facto home). Ids are
+	// NOT preserved: nothing references rule ids persistently, and the
+	// legacy id space collides with build items'.
+	hasRules, err := s.tableExists("expect_rules")
+	if err != nil {
+		return err
+	}
+	if hasRules {
+		rows, err := s.db.Query("SELECT name, steps_json FROM expect_rules")
+		if err != nil {
+			return err
+		}
+		type ruleRow struct {
+			name      string
+			stepsJSON string
+		}
+		var legacyRules []ruleRow
+		for rows.Next() {
+			var r ruleRow
+			if err := rows.Scan(&r.name, &r.stepsJSON); err == nil {
+				legacyRules = append(legacyRules, r)
+			}
+		}
+		rows.Close()
+		for _, r := range legacyRules {
+			payload, _ := json.Marshal(FlashRulePayload{StepsJSON: r.stepsJSON})
+			// Idempotent within a run AND across a partial run: skip when
+			// this rule name already exists as a flash rule.
+			if _, err := s.db.Exec(
+				"INSERT INTO config_objects (project_id, kind, name, payload_json) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM config_objects WHERE kind = ? AND name = ?)",
+				s.legacyFlashProjectID(), KindFlashRule, r.name, string(payload), KindFlashRule, r.name); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Keep AUTOINCREMENT above every migrated id (new rows never reuse one).
+	if _, err := s.db.Exec(
+		"UPDATE sqlite_sequence SET seq = (SELECT MAX(id) FROM config_objects) WHERE name = 'config_objects' AND seq < (SELECT MAX(id) FROM config_objects)"); err != nil {
+		return err
+	}
+	_, err = s.db.Exec("INSERT INTO settings (key, value) VALUES ('legacy_migrated_v1', '1')")
+	return err
+}
+
+// legacyFlashProjectID resolves the project flash rules attach to during
+// migration (the demo project; created if absent).
+func (s *Store) legacyFlashProjectID() int64 {
+	var id int64
+	err := s.db.QueryRow("SELECT id FROM projects WHERE name = 'demo'").Scan(&id)
+	if err == nil {
+		return id
+	}
+	res, err := s.db.Exec("INSERT INTO projects (name, note) VALUES ('demo', 'built-in demo project')")
+	if err != nil {
+		return 1 // config_objects.project_id has no hard FK enforcement at migration time
+	}
+	id, _ = res.LastInsertId()
+	return id
+}
+
+// tableExists reports whether a table exists (legacy migration guard).
+func (s *Store) tableExists(name string) (bool, error) {
+	var n int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?", name).Scan(&n)
+	return n > 0, err
 }
 
 // writerLoop is the single writer goroutine: it owns all mutations so SQLite
