@@ -29,6 +29,8 @@ export const router = createRouter({
 					children: [
 						{ path: '', redirect: '/deploy/devices' },
 						{ path: 'devices', component: () => import('./views/DevicesView.vue') },
+						{ path: 'rules', component: () => import('./views/DeployRulesView.vue') },
+						{ path: 'deployments', component: () => import('./views/DeploymentsView.vue') },
 						{ path: 'flash', component: () => import('./views/ExpectView.vue') },
 						{ path: 'history', component: () => import('./views/HistoryView.vue') },
 					],

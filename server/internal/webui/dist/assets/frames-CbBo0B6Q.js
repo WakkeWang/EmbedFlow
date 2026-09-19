@@ -1,0 +1,1 @@
+var e={Auth:1,AuthOK:2,AuthFail:3,Heartbeat:4,ShareRequest:5,DeviceStatus:6,SessionCtrl:7,SessionState:8,ExpectProgress:9,Confirm:10,BuildCtrl:11,BuildEvent:12,DeployCtrl:13,DeployEvent:14};function t(e){let t=JSON.parse(e);return{type:t.type,body:t.body}}function n(e,t){return JSON.stringify({type:e,body:t})}export{n,t as r,e as t};

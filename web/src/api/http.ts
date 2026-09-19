@@ -45,6 +45,11 @@ export interface Device {
 	id: number
 	name: string
 	project: string
+	ssh_host?: string
+	ssh_port?: number
+	ssh_user?: string
+	ssh_set?: boolean
+	note?: string
 	busy: boolean
 	owner?: string
 	kind?: string
@@ -84,6 +89,29 @@ export const deviceApi = {
 	create: (name: string, project: string) =>
 		api<{ id: number }>('/api/devices', { method: 'POST', body: { name, project } }),
 	remove: (id: number) => api(`/api/devices/${id}`, { method: 'DELETE' }),
+	// SSH-aware variants (requirement 3.2). Password is write-only.
+	createV2: (d: {
+		name: string
+		project: string
+		ssh_host?: string
+		ssh_port?: number
+		ssh_user?: string
+		ssh_password?: string
+		note?: string
+	}) => api<{ id: number }>('/api/devices/v2', { method: 'POST', body: d }),
+	update: (
+		id: number,
+		d: {
+			name: string
+			project: string
+			ssh_host?: string
+			ssh_port?: number
+			ssh_user?: string
+			ssh_password?: string
+			note?: string
+		},
+	) => api(`/api/devices/${id}`, { method: 'PUT', body: d }),
+	sshTest: (id: number) => api<{ ok: boolean; detail: string }>(`/api/devices/${id}/ssh-test`, { method: 'POST' }),
 }
 
 export const sessionApi = {
@@ -201,6 +229,69 @@ export const buildRecordApi = {
 export const settingsApi = {
 	get: () => api<Record<string, string>>('/api/settings'),
 	put: (values: Record<string, string>) => api('/api/settings', { method: 'PUT', body: values }),
+}
+
+// Deploy module (M3): deploy rules, deploy records.
+
+export interface DeployParamDef {
+	name: string
+	value?: string
+}
+
+export interface DeployPayload {
+	mode: 'manual' | 'ssh' | 'flash'
+	steps_md?: string
+	ssh_device_id?: number
+	ssh_commands?: string[]
+	ssh_params?: DeployParamDef[]
+	ssh_timeout_sec?: number
+	flash_device_id?: number
+	flash_steps_json?: string
+	flash_timeout_sec?: number
+}
+
+export interface DeployRuleRecord {
+	id: number
+	project_id: number
+	name: string
+	mode: 'manual' | 'ssh' | 'flash'
+	created_at: string
+	updated_at: string
+	payload: DeployPayload
+}
+
+export interface DeployRecordRecord {
+	id: number
+	project_id: number
+	rule_id: number
+	device_id: number
+	build_record_id: number
+	executor: string
+	status: 'running' | 'succeeded' | 'failed' | 'canceled'
+	detail: string
+	exec_record_id?: number
+	session_id?: number
+	started_at: string
+	ended_at: string
+}
+
+export const deployRuleApi = {
+	list: (projectId: number) => api<DeployRuleRecord[]>(`/api/projects/${projectId}/deploy-rules`),
+	get: (id: number) => api<{ rule: DeployRuleRecord; payload: DeployPayload }>(`/api/deploy-rules/${id}`),
+	create: (projectId: number, body: Partial<DeployRuleRecord> & { payload?: DeployPayload }) =>
+		api<{ id: number }>(`/api/projects/${projectId}/deploy-rules`, { method: 'POST', body }),
+	update: (id: number, body: Partial<DeployRuleRecord> & { payload?: DeployPayload }) =>
+		api(`/api/deploy-rules/${id}`, { method: 'PUT', body }),
+	remove: (id: number) => api(`/api/deploy-rules/${id}`, { method: 'DELETE' }),
+}
+
+export const deployApi = {
+	trigger: (ruleId: number, buildRecordId: number, params: Record<string, string>) =>
+		api<{ id: number }>('/api/deployments', { method: 'POST', body: { rule_id: ruleId, build_record_id: buildRecordId, params } }),
+	list: (projectId: number) => api<DeployRecordRecord[]>(`/api/projects/${projectId}/deployments`),
+	get: (id: number) => api<DeployRecordRecord>(`/api/deployments/${id}`),
+	cancel: (id: number) => api(`/api/deployments/${id}/cancel`, { method: 'POST' }),
+	logTail: (id: number, n = 1000) => api<{ tail: string }>(`/api/deployments/${id}/log/tail?n=${n}`),
 }
 
 export const userApi = {

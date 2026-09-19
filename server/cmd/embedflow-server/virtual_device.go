@@ -84,6 +84,10 @@ func (h *coordinator) startDemoDevice() error {
 			if err := h.seedDemoBuildItem(devID); err != nil {
 				slog.Warn("demo build item", "err", err)
 			}
+			// Same for the M3 deploy seed.
+			if err := h.seedDemoDeployRule(devID); err != nil {
+				slog.Warn("demo deploy rule", "err", err)
+			}
 			go h.attachVirtual(vd, devID)
 			return nil
 		}
@@ -102,9 +106,65 @@ func (h *coordinator) startDemoDevice() error {
 	if err := h.seedDemoBuildItem(devID); err != nil {
 		slog.Warn("demo build item", "err", err)
 	}
+	// Seed a demo deploy rule (M3): the manual form, so visitors see the
+	// deploy surface without hardware or an SSH target.
+	if err := h.seedDemoDeployRule(devID); err != nil {
+		slog.Warn("demo deploy rule", "err", err)
+	}
 
 	h.attachVirtual(vd, devID)
 	return nil
+}
+
+// seedDemoDeployRule creates the demo deploy rule (idempotently): a manual
+// rule referencing the demo build's artifact -- zero hardware needed.
+func (h *coordinator) seedDemoDeployRule(devID int64) error {
+	ctx := context.Background()
+	rules, _, err := h.store.ListDeployRules(ctx, h.demoProjectID())
+	if err != nil {
+		return err
+	}
+	for _, r := range rules {
+		if r.Name == "demo-manual-deploy" {
+			return nil
+		}
+	}
+	_, err = h.store.CreateDeployRule(ctx, h.demoProjectID(), "demo-manual-deploy", store.DeployPayload{
+		Mode: "manual",
+		StepsMD: "1. Download `demo-artifact.bin` from the build record.\n" +
+			"2. Copy it to the device's /run/media/sda1/ directory (USB stick).\n" +
+			"3. Reboot the device and watch the serial terminal for `demo-payload loaded`.",
+	})
+	if err != nil {
+		return err
+	}
+	// A flash-mode demo rule too: the virtual device speaks the M1 demo
+	// script, so the flash deploy path runs end to end with zero hardware.
+	steps := []expect.Step{
+		{Await: "Press ENTER", Timeout: 10 * time.Second},
+		{Send: `\r`},
+		{Await: "demo login:", Timeout: 10 * time.Second},
+		{Send: `demo\r`},
+		{Await: "Password:", Timeout: 10 * time.Second},
+		{Send: `demo\r`, Secret: true},
+		{Await: `demo#`, Timeout: 10 * time.Second},
+		{Send: `install\r`},
+		{Delay: 1500 * time.Millisecond},
+		{Await: `install over`, Timeout: 15 * time.Second},
+		{Send: `reboot\r`},
+		{Await: `demo-virtual ready`, Timeout: 10 * time.Second},
+	}
+	raw, err := expect.EncodeSteps(steps)
+	if err != nil {
+		return err
+	}
+	_, err = h.store.CreateDeployRule(ctx, h.demoProjectID(), "demo-flash-deploy", store.DeployPayload{
+		Mode:            "flash",
+		FlashDeviceID:   devID,
+		FlashStepsJSON:  string(raw),
+		FlashTimeoutSec: 120,
+	})
+	return err
 }
 
 // seedDemoBuildItem creates the demo build item + its scratch source repo

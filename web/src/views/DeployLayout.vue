@@ -3,14 +3,17 @@ import { useRoute, useRouter } from 'vue-router'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-// Deploy section shell: sub-navigation tabs (devices / flash rules /
-// session history). The M1 pages mount under these routes.
+// Deploy section shell: sub-navigation tabs (devices / deploy rules /
+// deployments / flash rules / session history). The M1 pages keep their
+// routes; M3 adds rules + records.
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 
 const tabs = computed(() => [
 	{ key: 'devices', label: t('nav.deployDevices') },
+	{ key: 'rules', label: t('nav.deployRules') },
+	{ key: 'deployments', label: t('nav.deployRecords') },
 	{ key: 'flash', label: t('nav.deployFlash') },
 	{ key: 'history', label: t('nav.deploySessions') },
 ])

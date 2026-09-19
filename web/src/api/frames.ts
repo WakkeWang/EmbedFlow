@@ -15,6 +15,8 @@ export const Frame = {
 	Confirm: 10,
 	BuildCtrl: 11,
 	BuildEvent: 12,
+	DeployCtrl: 13,
+	DeployEvent: 14,
 } as const
 
 export type FrameType = (typeof Frame)[keyof typeof Frame]
@@ -79,6 +81,17 @@ export interface BuildEventFrame {
 	phase: string
 	detail?: string
 	log_line?: string
+}
+
+export interface DeployCtrlFrame {
+	command: 'subscribe' | 'unsubscribe'
+	deploy_id: number
+}
+
+export interface DeployEventFrame {
+	deploy_id: number
+	phase: string
+	detail?: string
 }
 
 export type ControlBody =

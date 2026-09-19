@@ -47,7 +47,7 @@ type DeployPayload struct {
 // the SSH template references as ${params.<name>}.
 type DeployParamDef struct {
 	Name    string `json:"name"`
-	Default string `json:"default,omitempty"`
+	Default string `json:"value,omitempty"`
 }
 
 // DeployRecord is one deployment execution (CONTEXT.md: 部署记录).
