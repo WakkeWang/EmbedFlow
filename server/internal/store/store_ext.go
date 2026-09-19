@@ -53,9 +53,11 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	var out []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Note, &p.CreatedAt); err != nil {
+		var created string
+		if err := rows.Scan(&p.ID, &p.Name, &p.Note, &created); err != nil {
 			return nil, err
 		}
+		p.CreatedAt = parseTime(created)
 		out = append(out, p)
 	}
 	return out, rows.Err()

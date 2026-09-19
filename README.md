@@ -18,11 +18,12 @@ EmbedFlow makes **the human a first-class citizen of the test flow**: human obse
 
 ### What you get
 
+- **Build module**: turn your build scripts into project-scoped build items -- git or server-local sources, build commands with timeout, artifact globs with sha256/md5 checksums, version extraction. Trigger batches (up to N in parallel) over prerequisite groups (OR within a group, AND across groups); every build gets a full phase-segmented log, a commit snapshot, and archived artifacts with recorded checksums. Dirty sources refuse to build.
 - **Browser terminal**: open a session against a shared serial device from any browser (xterm.js), with device mutex, busy-rejection with occupier info, idle timeouts, and read-only follow for a second viewer
 - **Configurable expect flashing**: turn your VBS flash scripts into reusable, reviewable step sequences (await string + optional send + timeout + failure action + delay + control-char encoding), editable in web forms, executed with live progress and a guarded abort
 - **Human confirmation cards**: record "LED on?", "cable unplugged" as first-class steps -- PASS/FAIL with notes, never auto-dismissed, stored in the session record
 - **Session logs that survive**: byte-accurate, timestamped RX/TX lines, buffered + time-flushed, download with HTTP Range resume; write failures mark the session "log incomplete" instead of silently losing data
-- **Virtual demo device**: run the whole loop with zero hardware
+- **Virtual demo device**: run the whole loop with zero hardware -- expect flashing AND a real build (cloned git repo, archived artifact)
 
 ## Quick start (zero hardware)
 
@@ -39,7 +40,7 @@ go build -o embedflow-server ./server/cmd/embedflow-server
 # 3. Open http://localhost:8420, log in (default admin/admin -- change it)
 ```
 
-With `-demo` the server registers a `demo-virtual` board and seeds a `demo-flash` expect rule. Open the device, press Run, and watch a full uboot-style flash flow execute in the terminal -- no device, no serial cable.
+With `-demo` the server registers a `demo-virtual` board, seeds a `demo-flash` expect rule, and seeds a `demo-build` build item (a self-contained git repo under the data dir). Open the device, press Run, and watch a full uboot-style flash flow execute in the terminal; open the Build section and trigger a real build with an archived, checksummed artifact -- no device, no serial cable.
 
 ## Connecting a real device
 
@@ -85,7 +86,7 @@ docs/               requirements, design, ADRs
 
 ## Roadmap
 
-M1 (session layer) is the current milestone: sessions, logs, expect runs, human confirmations, virtual demo device. Next: build module (M2), deploy module with SSH (M3), test module with reports (M4), release module (M5). See `docs/designs/office-hours-design.md` for the full design and decision log.
+M1 (session layer) and M2 (build module) are done: sessions, logs, expect runs, human confirmations, build items, batches, records and artifacts, plus the virtual demo device covering both. Next: deploy module with SSH and flash rules per project (M3), test module with reports (M4), release module (M5). See `docs/designs/office-hours-design.md` for the full design and decision log.
 
 ## License
 
@@ -111,11 +112,12 @@ EmbedFlow 把**人作为测试流程的一等公民**：人为观察与人为干
 
 ### 核心能力
 
+- **构建模块**：把构建脚本变成工程内的构建项目——git 或服务器本地源、带超时的构建命令、产物通配声明与 sha256/md5 校验和、版本提取。按前置分组（组内 OR、组间 AND）触发批次（最多 N 个并行）；每次构建有完整的分段日志、commit 快照与归档产物及校验和。dirty 源拒建。
 - **浏览器终端**：任何浏览器对共享串口设备开会话（xterm.js），设备互斥、忙拒绝显示占用者、空闲超时、第二查看者只读跟随
 - **可配置 expect 刷机**：把 VBS 刷机脚本变成可复用、可审查的步骤序列（等待字符串 + 可选发送 + 超时 + 失败动作 + 延时 + 控制字符编码），网页表单编辑，实时进度、二次确认中止
 - **人为确认卡**：「LED 亮了吗」「拔掉电源线」作为正式步骤记录——PASS/FAIL 加备注，永不超时消失，进会话记录
 - **可靠的会话日志**：逐字节、带时间戳的 RX/TX 行，缓冲 + 定时双刷新，HTTP Range 断点续传下载；写失败标记「日志不完整」而不是静默丢数据
-- **虚拟演示设备**：零硬件跑通全流程
+- **虚拟演示设备**：零硬件跑通全流程——expect 刷机与真实构建（git 克隆、产物归档）都能跑
 
 ## 快速开始（零硬件）
 
@@ -132,7 +134,7 @@ go build -o embedflow-server ./server/cmd/embedflow-server
 # 3. 打开 http://localhost:8420，登录（默认 admin/admin——请立即改密码）
 ```
 
-`-demo` 模式会注册一块 `demo-virtual` 虚拟板卡并预置 `demo-flash` expect 规则。打开设备、点运行，就能在终端里看到完整的 uboot 风格刷机流程——不需要真机，不需要串口线。
+`-demo` 模式会注册一块 `demo-virtual` 虚拟板卡、预置 `demo-flash` expect 规则，并预置 `demo-build` 构建项目（源是数据目录下自带的 git 仓库）。打开设备、点运行，就能在终端里看到完整的 uboot 风格刷机流程；打开构建板块触发一次真实构建，拿到带校验和的归档产物——不需要真机，不需要串口线。
 
 ## 连接真实设备
 
@@ -168,7 +170,7 @@ cd web && npm run dev      # Vite dev server（带 API 代理）
 
 ## 路线图
 
-M1（会话层）为当前里程碑：会话、日志、expect 执行、人为确认、虚拟演示设备。后续：构建模块（M2）、SSH 部署模块（M3）、测试模块与报告（M4）、发布模块（M5）。完整设计与决策记录见 `docs/designs/office-hours-design.md`。
+M1（会话层）与 M2（构建模块）已完成：会话、日志、expect 执行、人为确认、构建项目、批次、构建记录与产物，虚拟演示设备同时覆盖刷机与构建。后续：SSH 部署模块与工程级刷机规则（M3）、测试模块与报告（M4）、发布模块（M5）。完整设计与决策记录见 `docs/designs/office-hours-design.md`。
 
 ## 许可证
 

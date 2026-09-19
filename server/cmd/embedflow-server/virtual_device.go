@@ -3,11 +3,16 @@ package main
 import (
 	"context"
 	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/WakkeWang/EmbedFlow/server/internal/expect"
+	"github.com/WakkeWang/EmbedFlow/server/internal/store"
 	"github.com/WakkeWang/EmbedFlow/server/internal/transport"
 )
 
@@ -85,8 +90,100 @@ func (h *coordinator) startDemoDevice() error {
 	h.demoRuleID = ruleID
 	h.mu.Unlock()
 
+	// Seed a demo build item too (M2): zero-hardware build loop for
+	// visitors -- a self-contained git repo under the data dir whose
+	// build command just emits an artifact file.
+	if err := h.seedDemoBuildItem(devID); err != nil {
+		slog.Warn("demo build item", "err", err)
+	}
+
 	h.attachVirtual(vd, devID)
 	return nil
+}
+
+// seedDemoBuildItem creates the demo build item + its scratch source repo
+// (idempotently, once per data dir). The repo lives under
+// <data>/demo-src/... so no network and no external paths are involved.
+func (h *coordinator) seedDemoBuildItem(_ int64) error {
+	ctx := context.Background()
+	items, err := h.store.ListBuildItemsByProject(ctx, h.demoProjectID())
+	if err != nil {
+		return err
+	}
+	for _, it := range items {
+		if it.Name == "demo-build" {
+			return nil
+		}
+	}
+
+	srcDir := filepath.Join(h.dataDir, "demo-src", "hello")
+	if _, err := os.Stat(filepath.Join(srcDir, ".git")); err != nil {
+		if err := os.MkdirAll(srcDir, 0o755); err != nil {
+			return err
+		}
+		run := func(args ...string) error {
+			cmd := exec.Command("git", append([]string{"-C", srcDir}, args...)...)
+			cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=demo", "GIT_AUTHOR_EMAIL=demo@local", "GIT_COMMITTER_NAME=demo", "GIT_COMMITTER_EMAIL=demo@local")
+			return cmd.Run()
+		}
+		if err := run("init", "-b", "main"); err != nil {
+			return err
+		}
+		script := "#!/bin/sh\necho demo-payload-v1 > demo-artifact.bin\necho version 1.0.0-demo\n"
+		if runtime.GOOS == "windows" {
+			script = "@echo off\r\necho demo-payload-v1> demo-artifact.bin\r\necho version 1.0.0-demo\r\n"
+		}
+		name := "build.sh"
+		if runtime.GOOS == "windows" {
+			name = "build.bat"
+		}
+		if err := os.WriteFile(filepath.Join(srcDir, name), []byte(script), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(srcDir, "VERSION"), []byte("1.0.0-demo\n"), 0o644); err != nil {
+			return err
+		}
+		if err := run("add", "-A"); err != nil {
+			return err
+		}
+		if err := run("commit", "-m", "demo source"); err != nil {
+			return err
+		}
+	}
+
+	command := "sh build.sh"
+	if runtime.GOOS == "windows" {
+		command = ".\\build.bat"
+	}
+	_, err = h.store.CreateBuildItem(ctx, store.BuildItem{
+		ProjectID:  h.demoProjectID(),
+		Name:       "demo-build",
+		SourceType: "local",
+		LocalPath:  srcDir,
+		Command:    command,
+		Artifacts:  []string{"demo-artifact.bin"},
+		VersionCmd: "cat VERSION",
+	})
+	return err
+}
+
+// demoProjectID returns the demo project's id, creating it if needed
+// (the demo device reads "demo" as its project string; the build item
+// hangs off a real project row).
+func (h *coordinator) demoProjectID() int64 {
+	projects, err := h.store.ListProjects(context.Background())
+	if err == nil {
+		for _, p := range projects {
+			if p.Name == "demo" {
+				return p.ID
+			}
+		}
+	}
+	id, err := h.store.CreateProject(context.Background(), "demo", "built-in demo project")
+	if err != nil {
+		return 0
+	}
+	return id
 }
 
 // attachVirtual wires the device and starts its script loop.
