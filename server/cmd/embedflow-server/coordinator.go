@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/WakkeWang/EmbedFlow/pkg/protocol"
+	"github.com/WakkeWang/EmbedFlow/server/internal/batch"
 	"github.com/WakkeWang/EmbedFlow/server/internal/expect"
 	"github.com/WakkeWang/EmbedFlow/server/internal/serialport"
 	"github.com/WakkeWang/EmbedFlow/server/internal/session"
@@ -115,10 +116,12 @@ type coordinator struct {
 	virtualPorts []*virtualPort
 	// nextConfirmID numbers confirmation cards monotonically.
 	nextConfirmID int64
+	// builds is the M2 build orchestrator (batch kernel + executor + subs).
+	builds *buildOrchestrator
 }
 
 func newCoordinator(kernel *session.Kernel, st *store.Store, dataDir string) *coordinator {
-	return &coordinator{
+	c := &coordinator{
 		kernel:          kernel,
 		store:           st,
 		dataDir:         dataDir,
@@ -129,6 +132,8 @@ func newCoordinator(kernel *session.Kernel, st *store.Store, dataDir string) *co
 		sharedBySession: map[int64]*sharedTransport{},
 		virtualSession:  map[int64]int64{},
 	}
+	c.builds = newBuildOrchestrator(batch.New(batch.Options{}), st, c)
+	return c
 }
 
 // validateToken satisfies transport.AuthConfig; the role rides AuthOK (1.5).
@@ -178,12 +183,27 @@ func (h *coordinator) OnControl(c *transport.ClientConn, f *protocol.Frame) {
 		h.onSessionCtrl(c, body)
 	case *protocol.ConfirmFrame:
 		h.onConfirm(c, body)
+	case *protocol.BuildCtrlFrame:
+		h.onBuildCtrl(c, body)
 	case *protocol.DeviceStatusFrame:
 		// Requirement 3.5 dual-layer detection: the client reports COM
 		// errors (cable pulled, port seized) explicitly. Surface loudly.
 		slog.Error("serial client port error", "user", c.User(), "port", body.Port, "err", body.Error)
 	default:
 		slog.Warn("unhandled control frame", "type", f.Type, "user", c.User())
+	}
+}
+
+// onBuildCtrl handles batch subscriptions (M2: the batch view gets live
+// record/log events while it is open).
+func (h *coordinator) onBuildCtrl(c *transport.ClientConn, f *protocol.BuildCtrlFrame) {
+	switch f.Command {
+	case "subscribe":
+		h.builds.subscribe(f.BatchID, c)
+	case "unsubscribe":
+		h.builds.unsubscribe(f.BatchID, c)
+	default:
+		slog.Warn("unknown build command", "command", f.Command)
 	}
 }
 
@@ -699,8 +719,9 @@ func (h *coordinator) deliverToDevice(sessionID int64, data []byte) bool {
 }
 
 // OnClose tears down the connection: unbind, end owned session per kind
-// (decision 1A disconnect branches).
+// (decision 1A disconnect branches), drop build subscriptions.
 func (h *coordinator) OnClose(c *transport.ClientConn) {
+	h.builds.unsubscribeAll(c)
 	h.mu.Lock()
 	st := h.conns[c]
 	delete(h.conns, c)

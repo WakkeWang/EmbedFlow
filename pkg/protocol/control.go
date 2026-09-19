@@ -26,6 +26,8 @@ const (
 	FrameSessionState   uint16 = 8  // server -> clients: session state broadcast
 	FrameExpectProgress uint16 = 9  // server -> web: expect step progress (DS-3A)
 	FrameConfirm        uint16 = 10 // both ways: human confirmation card (issue #9)
+	FrameBuildCtrl      uint16 = 11 // web -> server: build batch subscribe/unsubscribe
+	FrameBuildEvent     uint16 = 12 // server -> web: batch/record progress events (M2)
 )
 
 // Envelope is the JSON shape of every control frame on the wire.
@@ -133,6 +135,26 @@ type ConfirmFrame struct {
 	Note      string `json:"note,omitempty"`
 }
 
+// BuildCtrlFrame carries browser-side build subscriptions: the batch view
+// subscribes on entry and unsubscribes on leave, so live record/log events
+// reach only the pages that want them.
+type BuildCtrlFrame struct {
+	Command string `json:"command"` // subscribe | unsubscribe
+	BatchID int64  `json:"batch_id"`
+}
+
+// BuildEventFrame pushes build progress to subscribed browsers (M2):
+// record state changes and streamed log lines. Phase vocabulary:
+// started | log | succeeded | failed | skipped | canceled | batch_done.
+type BuildEventFrame struct {
+	BatchID  int64  `json:"batch_id"`
+	RecordID int64  `json:"record_id,omitempty"`
+	ItemName string `json:"item_name,omitempty"`
+	Phase    string `json:"phase"`
+	Detail   string `json:"detail,omitempty"`
+	LogLine  string `json:"log_line,omitempty"`
+}
+
 // frameDef binds a frame type to its concrete body constructor.
 type frameDef struct {
 	typ uint16
@@ -152,6 +174,8 @@ var registry = []frameDef{
 	{FrameSessionState, func() any { return new(SessionStateFrame) }},
 	{FrameExpectProgress, func() any { return new(ExpectProgressFrame) }},
 	{FrameConfirm, func() any { return new(ConfirmFrame) }},
+	{FrameBuildCtrl, func() any { return new(BuildCtrlFrame) }},
+	{FrameBuildEvent, func() any { return new(BuildEventFrame) }},
 }
 
 var decodeByType = func() map[uint16]func() any {

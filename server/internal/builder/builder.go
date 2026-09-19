@@ -68,6 +68,9 @@ type Result struct {
 	CommitSHA   string
 	VersionInfo string
 	ExitCode    *int
+	// Artifacts lists what archiveArtifacts stored (the caller persists
+	// the rows).
+	Artifacts []store.Artifact
 }
 
 // checksummer computes the configured checksum over a file.
@@ -231,7 +234,7 @@ func (e *Executor) run(recordID int64, item store.BuildItem, checksumSetting str
 		return Result{Detail: "no artifacts matched the declared globs", CommitSHA: sha, VersionInfo: versionInfo, ExitCode: &exitCode}
 	}
 
-	return Result{OK: true, Detail: fmt.Sprintf("%d artifacts archived", len(arts)), CommitSHA: sha, VersionInfo: versionInfo, ExitCode: &exitCode}
+	return Result{OK: true, Detail: fmt.Sprintf("%d artifacts archived", len(arts)), CommitSHA: sha, VersionInfo: versionInfo, ExitCode: &exitCode, Artifacts: arts}
 }
 
 // prepareSource gets a clean git worktree into tmpDir and returns the build

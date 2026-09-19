@@ -286,6 +286,22 @@ func (k *Kernel) Enqueue(plan Plan, selected []ItemID) (BatchID, []Event) {
 	return id, events
 }
 
+// PlanRecords returns the batch's planned records in execution order
+// (record id, item id, pending status). The executor persists these rows
+// before applying any Enqueue events: RecordStart refers to a record the
+// store must already contain.
+func (k *Kernel) PlanRecords(id BatchID) []Record {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	b, ok := k.batches[id]
+	if !ok {
+		return nil
+	}
+	out := make([]Record, len(b.Records))
+	copy(out, b.Records)
+	return out
+}
+
 // pumpLocked admits queued batches while slots are free and returns the
 // cumulative events (admission + first record start). Caller holds k.mu.
 func (k *Kernel) pumpLocked() []Event {

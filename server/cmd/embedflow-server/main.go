@@ -73,6 +73,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Build-module startup sweep (M2 mirrors CEO-7A): a restart cancels
+	// in-flight batches -- their tmp dirs and half-run states are not
+	// resumable, so honest terminal states beat zombie "running" rows.
+	if err := hub.builds.sweepStartup(); err != nil {
+		slog.Error("build startup sweep", "err", err)
+		os.Exit(1)
+	}
+
 	// Liveness tick loop.
 	ticker := time.NewTicker(time.Second)
 	go func() {
@@ -146,6 +154,25 @@ func (h *coordinator) mux(frontDir string) http.Handler {
 	api.Handle("POST /api/users", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleCreateUser)))
 	api.HandleFunc("POST /api/users/self/password", h.handleChangeOwnPassword)
 	api.Handle("POST /api/users/{id}/password", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleResetPassword)))
+
+	// Build module (requirement 2). Writes are admin-only; triggering a
+	// batch and reading records/downloads are member-executable.
+	api.Handle("POST /api/projects/{pid}/build-items", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleCreateBuildItem)))
+	api.HandleFunc("GET /api/projects/{pid}/build-items", h.handleListBuildItems)
+	api.Handle("PUT /api/build-items/{id}", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleUpdateBuildItem)))
+	api.Handle("DELETE /api/build-items/{id}", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleDeleteBuildItem)))
+	api.HandleFunc("POST /api/batches", h.handleCreateBatch)
+	api.HandleFunc("GET /api/batches", h.handleListBatches)
+	api.HandleFunc("GET /api/batches/{id}", h.handleGetBatch)
+	api.HandleFunc("POST /api/batches/{id}/cancel", h.handleCancelBatch)
+	api.HandleFunc("GET /api/build-records/{id}", h.handleGetBuildRecord)
+	api.HandleFunc("GET /api/build-records/{id}/artifacts", h.handleRecordArtifacts)
+	api.HandleFunc("GET /api/build-records/{id}/log/tail", h.handleBuildLogTail)
+	api.HandleFunc("DELETE /api/build-records/{id}", h.handleDeleteBuildRecord)
+	api.HandleFunc("POST /api/build-records/delete-all", h.handleDeleteBuildRecordsAll)
+	api.HandleFunc("GET /api/artifacts/{id}/download", h.handleArtifactDownload)
+	api.Handle("GET /api/settings", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleGetSettings)))
+	api.Handle("PUT /api/settings", authmw.RequireAdmin(admin, http.HandlerFunc(h.handlePutSettings)))
 
 	api.HandleFunc("GET /api/me", h.handleMe)
 	api.HandleFunc("GET /api/projects", h.handleListProjects)
