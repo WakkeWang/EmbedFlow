@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/WakkeWang/EmbedFlow/pkg/protocol"
@@ -22,6 +24,7 @@ import (
 	"github.com/WakkeWang/EmbedFlow/server/internal/builder"
 	"github.com/WakkeWang/EmbedFlow/server/internal/expect"
 	"github.com/WakkeWang/EmbedFlow/server/internal/paths"
+	"github.com/WakkeWang/EmbedFlow/server/internal/secretbox"
 	"github.com/WakkeWang/EmbedFlow/server/internal/session"
 	"github.com/WakkeWang/EmbedFlow/server/internal/sessionlog"
 	"github.com/WakkeWang/EmbedFlow/server/internal/store"
@@ -36,6 +39,7 @@ func main() {
 		addr      = flag.String("addr", ":8420", "listen address")
 		data      = flag.String("data", "", "data directory (default ./data)")
 		demo      = flag.Bool("demo", false, "run with the built-in virtual device (CEO-18A)")
+		secret    = flag.String("secret", "", "32-byte key for credential encryption (requirement 6.2); unset derives a machine-local key with a warning")
 		probeEcho = flag.Bool("probe-echo", false, "latency-probe mode (issue #2): echo every client binary frame back unchanged, no store, no sessions")
 	)
 	flag.Parse()
@@ -56,6 +60,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	box, err := credentialBox(*secret)
+	if err != nil {
+		slog.Error("credential key", "err", err)
+		os.Exit(1)
+	}
+
 	st, err := store.Open(filepath.Join(dataDir, "embedflow.db"))
 	if err != nil {
 		slog.Error("open store", "err", err)
@@ -65,6 +75,7 @@ func main() {
 
 	kernel := session.New(session.Options{IdleTimeout: session.IdleTimeoutDefault})
 	hub := newCoordinator(kernel, st, dataDir)
+	hub.secrets = box
 
 	bootstrapAdmin(st)
 
@@ -79,6 +90,12 @@ func main() {
 	// resumable, so honest terminal states beat zombie "running" rows.
 	if err := hub.builds.sweepStartup(); err != nil {
 		slog.Error("build startup sweep", "err", err)
+		os.Exit(1)
+	}
+
+	// Deploy-module startup sweep (M3 mirrors CEO-7A for deploys).
+	if err := hub.deploys.sweepStartup(); err != nil {
+		slog.Error("deploy startup sweep", "err", err)
 		os.Exit(1)
 	}
 
@@ -133,6 +150,28 @@ func bootstrapAdmin(st *store.Store) {
 	if err := st.CreateUser(context.Background(), "admin", "admin", "admin"); err == nil {
 		slog.Warn("created default admin account (admin/admin) -- change the password")
 	}
+}
+
+// credentialBox builds the credential-encryption Box (requirement 6.2: the
+// key comes from the startup config). Without -secret a machine-derived key
+// stands in -- better than plaintext, but not portable across machines, so
+// the operator is told to set one.
+func credentialBox(secret string) (*secretbox.Box, error) {
+	if s := strings.TrimSpace(secret); s != "" {
+		key := sha256.Sum256([]byte(s))
+		return secretbox.New(key[:])
+	}
+	slog.Warn("no -secret configured: deriving a machine-local credential key (set -secret for a portable, stable key)")
+	key := sha256.Sum256([]byte("embedflow-credential-key:" + hostnameSeed()))
+	return secretbox.New(key[:])
+}
+
+func hostnameSeed() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return "unknown-host"
+	}
+	return h
 }
 
 // mux builds the HTTP surface. frontDir serves the built web assets; empty
@@ -195,6 +234,25 @@ func (h *coordinator) mux(frontDir string) http.Handler {
 	// admin (requirement 1.5: members execute, admins configure).
 	api.HandleFunc("GET /api/settings", h.handleGetSettings)
 	api.Handle("PUT /api/settings", authmw.RequireAdmin(admin, http.HandlerFunc(h.handlePutSettings)))
+
+	// Deploy module (requirement 3, M3). Same role split as the build
+	// module: rule writes are admin, trigger/read/cancel are member.
+	api.Handle("POST /api/projects/{pid}/deploy-rules", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleCreateDeployRule)))
+	api.HandleFunc("GET /api/projects/{pid}/deploy-rules", h.handleListDeployRules)
+	api.HandleFunc("GET /api/deploy-rules/{id}", h.handleGetDeployRule)
+	api.Handle("PUT /api/deploy-rules/{id}", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleUpdateDeployRule)))
+	api.Handle("DELETE /api/deploy-rules/{id}", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleDeleteDeployRule)))
+	api.HandleFunc("POST /api/deployments", h.handleTriggerDeploy)
+	api.HandleFunc("GET /api/projects/{pid}/deployments", h.handleListDeployments)
+	api.HandleFunc("GET /api/deployments/{id}", h.handleGetDeployment)
+	api.HandleFunc("POST /api/deployments/{id}/cancel", h.handleCancelDeployment)
+	api.HandleFunc("GET /api/deployments/{id}/log/tail", h.handleDeployLogTail)
+
+	// Device SSH management (requirement 3.2): v2 create/update carry SSH
+	// fields; ssh-test is the manual probe.
+	api.Handle("POST /api/devices/v2", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleCreateDeviceV2)))
+	api.Handle("PUT /api/devices/{id}", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleUpdateDevice)))
+	api.HandleFunc("POST /api/devices/{id}/ssh-test", h.handleSSHTest)
 
 	api.HandleFunc("GET /api/me", h.handleMe)
 	api.HandleFunc("GET /api/projects", h.handleListProjects)

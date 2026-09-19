@@ -122,17 +122,49 @@ func (s *Store) AuthenticateUser(ctx context.Context, username, password string)
 	}
 	return u, nil
 }
+// Device is a registered target machine (CONTEXT.md: 设备). SSH fields are
+// requirement 3.2; SshPassEnc holds the secretbox ciphertext (requirement
+// 6.2) and never crosses the API -- handlers return SshSet instead.
+type Device struct {
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Project    string `json:"project"`
+	SSHHost    string `json:"ssh_host,omitempty"`
+	SSHPort    int    `json:"ssh_port,omitempty"`
+	SSHUser    string `json:"ssh_user,omitempty"`
+	SshPassEnc string `json:"-"`
+	Note       string `json:"note,omitempty"`
+	// SshSet reports whether a password is stored (the UI's "credential
+	// present" indicator without exposing it).
+	SshSet bool `json:"ssh_set"`
+}
+
+const deviceCols = "id, name, project, ssh_host, ssh_port, ssh_user, ssh_pass_enc, note"
+
+const deviceInsertCols = "name, project, ssh_host, ssh_port, ssh_user, ssh_pass_enc, note"
+
+func scanDevice(sc interface{ Scan(dest ...any) error }) (Device, error) {
+	var d Device
+	var pass string
+	if err := sc.Scan(&d.ID, &d.Name, &d.Project, &d.SSHHost, &d.SSHPort, &d.SSHUser, &pass, &d.Note); err != nil {
+		return Device{}, err
+	}
+	d.SshPassEnc = pass
+	d.SshSet = pass != ""
+	return d, nil
+}
+
 // ListDevices returns all registered devices in insertion order.
 func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id, name, project FROM devices ORDER BY id")
+	rows, err := s.db.QueryContext(ctx, "SELECT "+deviceCols+" FROM devices ORDER BY id")
 	if err != nil {
 		return nil, fmt.Errorf("store: list devices: %w", err)
 	}
 	defer rows.Close()
 	var out []Device
 	for rows.Next() {
-		var d Device
-		if err := rows.Scan(&d.ID, &d.Name, &d.Project); err != nil {
+		d, err := scanDevice(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -146,6 +178,51 @@ func (s *Store) DeleteDevice(ctx context.Context, id int64) error {
 		_, err := s.db.ExecContext(ctx, "DELETE FROM devices WHERE id = ?", id)
 		return err
 	})
+}
+
+// CreateDeviceFull registers a device with SSH fields (requirement 3.2).
+// passEnc arrives pre-encrypted: the store never sees plaintext passwords.
+func (s *Store) CreateDeviceFull(ctx context.Context, d Device, passEnc string) (int64, error) {
+	var id int64
+	err := s.enqueue(ctx, func() error {
+		res, err := s.db.ExecContext(ctx,
+			"INSERT INTO devices ("+deviceInsertCols+") VALUES (?, ?, ?, ?, ?, ?, ?)",
+			d.Name, d.Project, d.SSHHost, d.SSHPort, d.SSHUser, passEnc, d.Note)
+		if err != nil {
+			return err
+		}
+		id, err = res.LastInsertId()
+		return err
+	})
+	return id, err
+}
+
+// UpdateDeviceSSH overwrites a device's SSH fields. An empty passEnc keeps
+// the stored password (the UI sends one only when the operator re-typed it).
+func (s *Store) UpdateDeviceSSH(ctx context.Context, d Device, passEnc string) error {
+	return s.enqueue(ctx, func() error {
+		if passEnc == "" {
+			_, err := s.db.ExecContext(ctx,
+				"UPDATE devices SET ssh_host = ?, ssh_port = ?, ssh_user = ?, note = ? WHERE id = ?",
+				d.SSHHost, d.SSHPort, d.SSHUser, d.Note, d.ID)
+			return err
+		}
+		_, err := s.db.ExecContext(ctx,
+			"UPDATE devices SET ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_pass_enc = ?, note = ? WHERE id = ?",
+			d.SSHHost, d.SSHPort, d.SSHUser, passEnc, d.Note, d.ID)
+		return err
+	})
+}
+
+// GetDeviceFull fetches one device with SSH fields (the ssh-test and deploy
+// paths need the encrypted password; callers decrypt).
+func (s *Store) GetDeviceFull(ctx context.Context, id int64) (Device, error) {
+	d, err := scanDevice(s.db.QueryRowContext(ctx,
+		"SELECT "+deviceCols+" FROM devices WHERE id = ?", id))
+	if err != nil {
+		return Device{}, fmt.Errorf("store: get device %d: %w", id, err)
+	}
+	return d, nil
 }
 
 // ExpectRule CRUD (CreateExpectRule / GetExpectRule / UpdateExpectRule /

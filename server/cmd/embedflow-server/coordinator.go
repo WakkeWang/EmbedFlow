@@ -13,6 +13,7 @@ import (
 	"github.com/WakkeWang/EmbedFlow/pkg/protocol"
 	"github.com/WakkeWang/EmbedFlow/server/internal/batch"
 	"github.com/WakkeWang/EmbedFlow/server/internal/expect"
+	"github.com/WakkeWang/EmbedFlow/server/internal/secretbox"
 	"github.com/WakkeWang/EmbedFlow/server/internal/serialport"
 	"github.com/WakkeWang/EmbedFlow/server/internal/session"
 	"github.com/WakkeWang/EmbedFlow/server/internal/sessionlog"
@@ -118,6 +119,11 @@ type coordinator struct {
 	nextConfirmID int64
 	// builds is the M2 build orchestrator (batch kernel + executor + subs).
 	builds *buildOrchestrator
+	// secrets encrypts device credentials at rest (requirement 6.2); set
+	// from main's startup config before any handler runs.
+	secrets *secretbox.Box
+	// deploys is the M3 deploy orchestrator (rules + deploy records).
+	deploys *deployOrchestrator
 }
 
 func newCoordinator(kernel *session.Kernel, st *store.Store, dataDir string) *coordinator {
@@ -133,6 +139,7 @@ func newCoordinator(kernel *session.Kernel, st *store.Store, dataDir string) *co
 		virtualSession:  map[int64]int64{},
 	}
 	c.builds = newBuildOrchestrator(batch.New(batch.Options{}), st, c)
+	c.deploys = newDeployOrchestrator(st, c)
 	return c
 }
 
@@ -185,6 +192,8 @@ func (h *coordinator) OnControl(c *transport.ClientConn, f *protocol.Frame) {
 		h.onConfirm(c, body)
 	case *protocol.BuildCtrlFrame:
 		h.onBuildCtrl(c, body)
+	case *protocol.DeployCtrlFrame:
+		h.onDeployCtrl(c, body)
 	case *protocol.DeviceStatusFrame:
 		// Requirement 3.5 dual-layer detection: the client reports COM
 		// errors (cable pulled, port seized) explicitly. Surface loudly.
@@ -204,6 +213,19 @@ func (h *coordinator) onBuildCtrl(c *transport.ClientConn, f *protocol.BuildCtrl
 		h.builds.unsubscribe(f.BatchID, c)
 	default:
 		slog.Warn("unknown build command", "command", f.Command)
+	}
+}
+
+// onDeployCtrl handles deploy subscriptions (M3: the deploy detail view
+// gets live progress/log events while it is open).
+func (h *coordinator) onDeployCtrl(c *transport.ClientConn, f *protocol.DeployCtrlFrame) {
+	switch f.Command {
+	case "subscribe":
+		h.deploys.subscribe(f.DeployID, c)
+	case "unsubscribe":
+		h.deploys.unsubscribe(f.DeployID, c)
+	default:
+		slog.Warn("unknown deploy command", "command", f.Command)
 	}
 }
 
@@ -545,7 +567,8 @@ func describeStep(s expect.Step) string {
 }
 
 // abortExpect stops a running sequence (requirement 3.6: the operator's
-// abort button; DS-7B confirm happens in the UI).
+// abort button; DS-7B confirm happens in the UI). c may be nil when the
+// abort comes from a non-WS path (deploy cancel).
 func (h *coordinator) abortExpect(c *transport.ClientConn, sessionID int64) {
 	h.mu.Lock()
 	runner := h.expectRuns[sessionID]
@@ -553,6 +576,84 @@ func (h *coordinator) abortExpect(c *transport.ClientConn, sessionID int64) {
 	if runner != nil {
 		runner.Abort()
 	}
+}
+
+// flashTransport picks the byte source for a flash deploy run: the shared
+// serial client when one is bound, else the virtual device (demo mode).
+// done() releases the per-run resources (the virtual port registration).
+func (h *coordinator) flashTransport(deviceID, sid int64) (serialport.Port, func() error) {
+	h.mu.Lock()
+	var transport_ *transport.ClientConn
+	for cc, st := range h.conns {
+		if st.boundDevice == deviceID && st.sessionID == 0 {
+			transport_ = cc
+			break
+		}
+	}
+	vd := h.virtual
+	h.mu.Unlock()
+
+	if transport_ != nil {
+		shared := newSharedTransport(sid, transport_, h)
+		h.mu.Lock()
+		h.sharedBySession[sid] = shared
+		h.mu.Unlock()
+		return shared, func() error {
+			h.mu.Lock()
+			delete(h.sharedBySession, sid)
+			h.mu.Unlock()
+			return nil
+		}
+	}
+	if vd != nil && vd.deviceID == deviceID {
+		vp := newVirtualPort(h, deviceID, sid)
+		h.mu.Lock()
+		h.virtualPorts = append(h.virtualPorts, vp)
+		h.mu.Unlock()
+		return vp, func() error {
+			h.mu.Lock()
+			kept := h.virtualPorts[:0]
+			for _, p := range h.virtualPorts {
+				if p.sid != sid {
+					kept = append(kept, p)
+				}
+			}
+			h.virtualPorts = kept
+			h.mu.Unlock()
+			return nil
+		}
+	}
+	return nil, func() error { return nil }
+}
+
+// decryptPassword opens a stored credential. Empty stored value decrypts to
+// empty (no credential); unreadable ciphertext also yields empty -- callers
+// treat empty as "no usable credential".
+func (h *coordinator) decryptPassword(enc string) string {
+	if enc == "" {
+		return ""
+	}
+	if h.secrets == nil {
+		slog.Warn("credential present but no key configured")
+		return ""
+	}
+	plain, err := h.secrets.Decrypt(enc)
+	if err != nil {
+		slog.Warn("credential decrypt failed", "err", err)
+		return ""
+	}
+	return plain
+}
+
+// encryptPassword seals a credential for storage (device create/update).
+func (h *coordinator) encryptPassword(plain string) (string, error) {
+	if plain == "" {
+		return "", nil
+	}
+	if h.secrets == nil {
+		return "", errors.New("no credential key configured")
+	}
+	return h.secrets.Encrypt(plain)
 }
 
 // onConfirm resolves a human confirmation card (issue #9).
@@ -719,9 +820,10 @@ func (h *coordinator) deliverToDevice(sessionID int64, data []byte) bool {
 }
 
 // OnClose tears down the connection: unbind, end owned session per kind
-// (decision 1A disconnect branches), drop build subscriptions.
+// (decision 1A disconnect branches), drop build/deploy subscriptions.
 func (h *coordinator) OnClose(c *transport.ClientConn) {
 	h.builds.unsubscribeAll(c)
+	h.deploys.unsubscribeAll(c)
 	h.mu.Lock()
 	st := h.conns[c]
 	delete(h.conns, c)

@@ -36,12 +36,8 @@ type ExpectRule struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// Device is a registered target machine (CONTEXT.md: 设备).
-type Device struct {
-	ID      int64  `json:"id"`
-	Name    string `json:"name"`
-	Project string `json:"project"`
-}
+// Device is a registered target machine (CONTEXT.md: 设备) -- the SSH-field
+// variant lives in store_ext.go (M3).
 
 // Store wraps the SQLite handle plus the serializing write queue.
 type Store struct {
@@ -90,6 +86,14 @@ CREATE TABLE IF NOT EXISTS devices (
 	project    TEXT NOT NULL,
 	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
+-- M3 (requirement 3.2): SSH credentials, encrypted at rest (requirement
+-- 6.2, secretbox AES-256-GCM). ALTER-based so existing databases upgrade.
+ALTER TABLE devices ADD COLUMN ssh_host TEXT NOT NULL DEFAULT '';
+ALTER TABLE devices ADD COLUMN ssh_port INTEGER NOT NULL DEFAULT 22;
+ALTER TABLE devices ADD COLUMN ssh_user TEXT NOT NULL DEFAULT '';
+ALTER TABLE devices ADD COLUMN ssh_pass_enc TEXT NOT NULL DEFAULT '';
+ALTER TABLE devices ADD COLUMN note TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS projects (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -189,6 +193,35 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_record ON artifacts(build_record_id);
 CREATE TABLE IF NOT EXISTS settings (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS deploy_records (
+	id              INTEGER PRIMARY KEY AUTOINCREMENT,
+	project_id      INTEGER NOT NULL,
+	rule_id         INTEGER NOT NULL,
+	device_id       INTEGER NOT NULL,
+	build_record_id INTEGER NOT NULL DEFAULT 0,
+	executor        TEXT NOT NULL DEFAULT '',
+	status          TEXT NOT NULL CHECK (status IN ('running','succeeded','failed','canceled')),
+	detail          TEXT NOT NULL DEFAULT '',
+	exec_record_id  INTEGER NOT NULL DEFAULT 0,
+	session_id      INTEGER NOT NULL DEFAULT 0,
+	started_at      TEXT NOT NULL DEFAULT '',
+	ended_at        TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_deploy_records_project ON deploy_records(project_id);
+
+CREATE TABLE IF NOT EXISTS exec_records (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	device_id  INTEGER NOT NULL,
+	kind       TEXT NOT NULL DEFAULT 'deploy',
+	command    TEXT NOT NULL,
+	status     TEXT NOT NULL CHECK (status IN ('running','succeeded','failed')),
+	exit_code  INTEGER,
+	detail     TEXT NOT NULL DEFAULT '',
+	started_at TEXT NOT NULL,
+	ended_at   TEXT NOT NULL DEFAULT ''
 );
 `
 	_, err := s.db.Exec(ddl)
@@ -366,7 +399,8 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// CreateDevice registers a device, returning its id.
+// CreateDevice registers a device (name + project only; SSH fields ride
+// UpdateDeviceSSH -- M3).
 func (s *Store) CreateDevice(ctx context.Context, name, project string) (int64, error) {
 	var id int64
 	err := s.enqueue(ctx, func() error {
@@ -380,7 +414,8 @@ func (s *Store) CreateDevice(ctx context.Context, name, project string) (int64, 
 	return id, err
 }
 
-// GetDevice fetches one device.
+// GetDevice fetches one device (SSH columns included in store_ext.go's
+// full-scan variant; this row-level one stays minimal for the session kernel).
 func (s *Store) GetDevice(ctx context.Context, id int64) (Device, error) {
 	var d Device
 	err := s.db.QueryRowContext(ctx, "SELECT id, name, project FROM devices WHERE id = ?", id).

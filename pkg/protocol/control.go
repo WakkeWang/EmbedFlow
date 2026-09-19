@@ -28,6 +28,8 @@ const (
 	FrameConfirm        uint16 = 10 // both ways: human confirmation card (issue #9)
 	FrameBuildCtrl      uint16 = 11 // web -> server: build batch subscribe/unsubscribe
 	FrameBuildEvent     uint16 = 12 // server -> web: batch/record progress events (M2)
+	FrameDeployCtrl     uint16 = 13 // web -> server: deploy record subscribe/unsubscribe (M3)
+	FrameDeployEvent    uint16 = 14 // server -> web: deploy progress events (M3)
 )
 
 // Envelope is the JSON shape of every control frame on the wire.
@@ -155,6 +157,20 @@ type BuildEventFrame struct {
 	LogLine  string `json:"log_line,omitempty"`
 }
 
+// DeployCtrlFrame subscribes a browser to one deploy record (M3).
+type DeployCtrlFrame struct {
+	Command  string `json:"command"` // subscribe | unsubscribe
+	DeployID int64  `json:"deploy_id"`
+}
+
+// DeployEventFrame pushes deploy progress to subscribed browsers (M3).
+// Phase vocabulary: running | log | succeeded | failed | canceled.
+type DeployEventFrame struct {
+	DeployID int64  `json:"deploy_id"`
+	Phase    string `json:"phase"`
+	Detail   string `json:"detail,omitempty"`
+}
+
 // frameDef binds a frame type to its concrete body constructor.
 type frameDef struct {
 	typ uint16
@@ -176,6 +192,8 @@ var registry = []frameDef{
 	{FrameConfirm, func() any { return new(ConfirmFrame) }},
 	{FrameBuildCtrl, func() any { return new(BuildCtrlFrame) }},
 	{FrameBuildEvent, func() any { return new(BuildEventFrame) }},
+	{FrameDeployCtrl, func() any { return new(DeployCtrlFrame) }},
+	{FrameDeployEvent, func() any { return new(DeployEventFrame) }},
 }
 
 var decodeByType = func() map[uint16]func() any {
