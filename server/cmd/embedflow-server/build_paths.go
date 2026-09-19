@@ -1,38 +1,22 @@
 package main
 
 import (
-	"path/filepath"
-	"strconv"
-	"strings"
+	"github.com/WakkeWang/EmbedFlow/server/internal/paths"
 )
 
-// Build-module filesystem path helpers. The paths package owns the layout;
-// these wrap it for the cmd layer (builds/<id>/log.txt and artifacts/<id>/).
+// Build-module filesystem path helpers delegate to the paths package (the
+// single owner of the data-dir layout). The cmd layer just binds record ids.
 
 func buildLogPath(dataDir string, recordID int64) string {
-	return filepath.Join(dataDir, "builds", strconv.FormatInt(recordID, 10), "log.txt")
+	return paths.BuildLog(dataDir, recordID)
 }
 
 func artifactDirPath(dataDir string, recordID int64) string {
-	return filepath.Join(dataDir, "artifacts", strconv.FormatInt(recordID, 10))
+	return paths.ArtifactDir(dataDir, recordID)
 }
 
 func artifactFilePath(dataDir string, recordID int64, name string) string {
-	return filepath.Join(artifactDirPath(dataDir, recordID), name)
-}
-
-// splitLines splits keeping trailing empty lines out.
-func splitLines(s string) []string {
-	s = strings.TrimRight(s, "\n")
-	if s == "" {
-		return nil
-	}
-	return strings.Split(s, "\n")
-}
-
-func joinLines(lines []string) string {
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.Join(lines, "\n") + "\n"
+	// paths.ArtifactDir + the artifact's file name; the name comes from the
+	// store (never user input at this point) and is a bare file name.
+	return paths.ArtifactDir(dataDir, recordID) + string('/') + name
 }

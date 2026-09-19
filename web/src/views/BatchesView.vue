@@ -21,7 +21,7 @@ import {
 	type BuildRecordRecord,
 } from '../api/http'
 import { useProject } from '../store/project'
-import { useAuth } from '../store/auth'
+import { statusType as sharedStatusType } from '../api/status'
 import { WSClient } from '../api/ws'
 import { Frame, type BuildEventFrame } from '../api/frames'
 
@@ -32,7 +32,6 @@ const { t } = useI18n()
 const message = useMessage()
 const router = useRouter()
 const { currentId } = useProject()
-const { isAdmin } = useAuth()
 
 const items = ref<BuildItemRecord[]>([])
 const batches = ref<BatchRecord[]>([])
@@ -123,6 +122,7 @@ async function openDetail(id: number) {
 		const res = await batchApi.get(id)
 		detailBatch.value = res.batch
 		detailRecords.value = res.records
+		liveLogs.value = {}
 		showDetail.value = true
 		ws?.sendControl(Frame.BuildCtrl, { command: 'subscribe', batch_id: id })
 	} catch (e) {
@@ -144,6 +144,11 @@ function onFrame(f: { type: number; body: any }) {
 	applyEvent(ev)
 }
 
+// Live log lines stream here while the batch drawer is open (requirement
+// 2.4: real-time build log). Each record's lines land in its own buffer;
+// the drawer renders them under the record's status.
+const liveLogs = ref<Record<number, string[]>>({})
+
 function applyEvent(ev: BuildEventFrame) {
 	if (ev.phase === 'batch_done' || ev.phase === 'batch_status') {
 		if (detailBatch.value && (ev.phase === 'batch_done' || !detailBatch.value.status || detailBatch.value.status === 'queued' || detailBatch.value.status === 'running')) {
@@ -154,12 +159,22 @@ function applyEvent(ev: BuildEventFrame) {
 		}
 		return
 	}
+	if (ev.phase === 'log') {
+		if (ev.record_id) {
+			const buf = liveLogs.value[ev.record_id] ?? (liveLogs.value[ev.record_id] = [])
+			buf.push(ev.detail ?? '')
+			// Keep the drawer light: the full log is one download away.
+			if (buf.length > 200) buf.shift()
+		}
+		return
+	}
 	if (!ev.record_id) return
 	const i = detailRecords.value.findIndex((r) => r.id === ev.record_id)
 	if (i < 0) return
 	switch (ev.phase) {
 		case 'started':
 			detailRecords.value[i].status = 'building'
+			liveLogs.value[ev.record_id] = []
 			break
 		case 'succeeded':
 			detailRecords.value[i].status = 'succeeded'
@@ -188,20 +203,7 @@ async function cancelBatch(b: BatchRecord) {
 }
 
 function statusType(s: string): 'default' | 'info' | 'success' | 'error' | 'warning' {
-	switch (s) {
-		case 'running':
-		case 'building':
-			return 'info'
-		case 'completed':
-		case 'succeeded':
-			return 'success'
-		case 'failed':
-			return 'error'
-		case 'canceled':
-			return 'warning'
-		default:
-			return 'default'
-	}
+	return sharedStatusType(s) as 'default' | 'info' | 'success' | 'error' | 'warning'
 }
 
 function itemNameOf(record: BuildRecordRecord): string {
@@ -211,6 +213,17 @@ function itemNameOf(record: BuildRecordRecord): string {
 
 function gotoRecord(r: BuildRecordRecord) {
 	router.push(`/build/records?open=${r.id}`)
+}
+
+// Batch elapsed time (plan B5: 状态徽章+耗时+执行人). Running batches count
+// from created_at to now; finished ones would need ended_at from the API,
+// which the batch row does not carry — the detail drawer shows durations.
+function batchAge(b: BatchRecord): string {
+	const ms = Date.now() - new Date(b.created_at ?? Date.now()).getTime()
+	if (!Number.isFinite(ms) || ms < 0) return ''
+	const s = Math.floor(ms / 1000)
+	const m = Math.floor(s / 60)
+	return m > 0 ? `${m}m ${s % 60}s` : `${s}s`
 }
 
 const detailColumns = computed<DataTableColumns<BuildRecordRecord>>(() => [
@@ -268,9 +281,10 @@ const itemOptions = computed(() =>
 					<span class="batch-id mono">#{{ b.id }}</span>
 					<NTag size="small" :type="statusType(b.status)">{{ t('build.batch_' + b.status) }}</NTag>
 					<span class="hint">{{ b.created_by }}</span>
+					<span v-if="b.status === 'queued' || b.status === 'running'" class="hint mono">{{ batchAge(b) }}</span>
 					<span class="flex1"></span>
 					<NButton
-						v-if="(b.status === 'queued' || b.status === 'running') && isAdmin"
+						v-if="b.status === 'queued' || b.status === 'running'"
 						size="tiny"
 						type="error"
 						quaternary
@@ -284,6 +298,14 @@ const itemOptions = computed(() =>
 
 		<NModal :show="showDetail" preset="card" :title="`${t('build.batch')} #${detailBatch?.id}`" style="width: 760px" @after-leave="closeDetail">
 			<NDataTable :columns="detailColumns" :data="detailRecords" size="small" />
+			<!-- Live log lines (requirement 2.4: WebSocket-pushed build log).
+			     The full log stays one download away in the record drawer. -->
+			<template v-for="r in detailRecords" :key="r.id">
+				<div v-if="(liveLogs[r.id]?.length ?? 0) > 0" class="live-log">
+					<span class="live-log-title mono">#{{ r.id }} {{ itemNameOf(r) }}</span>
+					<pre class="live-log-pre">{{ liveLogs[r.id].join('\n') }}</pre>
+				</div>
+			</template>
 		</NModal>
 	</div>
 </template>
@@ -317,6 +339,25 @@ const itemOptions = computed(() =>
 	display: flex;
 	align-items: center;
 	gap: 10px;
+}
+.live-log {
+	margin-top: 10px;
+}
+.live-log-title {
+	font-size: 12px;
+	color: rgba(0, 0, 0, 0.55);
+}
+.live-log-pre {
+	background: rgba(0, 0, 0, 0.04);
+	border-radius: 8px;
+	padding: 8px 12px;
+	font-family: 'JetBrains Mono', Consolas, monospace;
+	font-size: 12px;
+	white-space: pre-wrap;
+	word-break: break-all;
+	margin: 4px 0 0;
+	max-height: 220px;
+	overflow: auto;
 }
 .batch-id {
 	font-weight: 600;

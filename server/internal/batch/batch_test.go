@@ -349,3 +349,36 @@ func TestNextIDs_Seed(t *testing.T) {
 		t.Fatalf("record id = %d, want 201", evts[1].RecordID)
 	}
 }
+
+// --- live cap adjustment ---
+
+func TestSetMaxParallel_RaisingCapAdmitsQueue(t *testing.T) {
+	k := New(Options{MaxParallel: 1})
+	b1, evts1 := k.Enqueue(Plan{Selected: ids(1), Items: []Item{item(1)}}, ids(1))
+	b2, _ := k.Enqueue(Plan{Selected: ids(2), Items: []Item{item(2)}}, ids(2))
+	if k.batches[b2].Status != BatchQueued {
+		t.Fatalf("b2 = %s, want queued", k.batches[b2].Status)
+	}
+
+	// Raising the cap admits the queued batch immediately; the events carry
+	// the admission so the executor can start its build.
+	evts := k.SetMaxParallel(2)
+	if k.batches[b2].Status != BatchRunning {
+		t.Fatalf("b2 after raise = %s, want running", k.batches[b2].Status)
+	}
+	if len(evts) != 2 {
+		t.Fatalf("events = %v, want admitted + start", kinds(evts))
+	}
+	if evts[0].Kind != EventBatchAdmitted || evts[1].Kind != EventRecordStart || evts[1].ItemID != 2 {
+		t.Fatalf("events = %+v", evts)
+	}
+
+	// Lowering works for future admissions; zero/negative ignored.
+	k.SetMaxParallel(0)
+	if k.MaxParallel() != 2 {
+		t.Fatalf("zero set changed the cap: %d", k.MaxParallel())
+	}
+
+	// Finishing b1's record frees the (now default) slot path as usual.
+	k.NotifyRecordDone(b1, evts1[len(evts1)-1].RecordID, OutcomeSucceeded)
+}

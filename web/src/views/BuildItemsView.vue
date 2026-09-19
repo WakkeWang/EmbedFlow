@@ -36,6 +36,9 @@ interface VM extends Partial<BuildItemRecord> {
 }
 
 const items = ref<BuildItemRecord[]>([])
+// All items across projects: prerequisite references may cross projects
+// (requirement 2.1), so the picker lists everything with project labels.
+const allItems = ref<BuildItemRecord[]>([])
 const editor = ref<VM | null>(null)
 const loading = ref(true)
 
@@ -57,6 +60,12 @@ async function load() {
 		items.value = await buildItemApi.list(currentId.value)
 	} catch {
 		items.value = []
+	}
+	// Cross-project picker source (2.1); non-fatal if it fails.
+	try {
+		allItems.value = await buildItemApi.listAll()
+	} catch {
+		allItems.value = items.value
 	} finally {
 		loading.value = false
 	}
@@ -160,9 +169,12 @@ function removeGroup(gi: number) {
 }
 
 const pickerOptions = computed(() =>
-	items.value
+	allItems.value
 		.filter((it) => it.id !== editor.value?.id)
-		.map((it) => ({ label: it.name, value: it.id as number })),
+		.map((it) => ({
+			label: it.project_id === currentId.value ? it.name : `${it.name} (project ${it.project_id})`,
+			value: it.id as number,
+		})),
 )
 
 function openPicker(gi: number) {
@@ -183,7 +195,9 @@ function removePrereq(gi: number, pi: number) {
 }
 
 function prereqName(id: number): string {
-	return items.value.find((it) => it.id === id)?.name ?? `#${id}`
+	const it = allItems.value.find((x) => x.id === id)
+	if (!it) return `#${id}`
+	return it.project_id === currentId.value ? it.name : `${it.name} (project ${it.project_id})`
 }
 
 const sourceOptions = [

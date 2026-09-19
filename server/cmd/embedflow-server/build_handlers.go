@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/WakkeWang/EmbedFlow/server/internal/batch"
+	"github.com/WakkeWang/EmbedFlow/server/internal/sessionlog"
 	"github.com/WakkeWang/EmbedFlow/server/internal/store"
 )
 
@@ -20,7 +21,7 @@ func pathPID(r *http.Request) (int64, error) {
 
 // decodeBuildItem reads the item payload; artifacts ride as a JSON array,
 // prereq groups as raw JSON ([[1,2],[3]]).
-func decodeBuildItem(r *http.Request, projectID int64) (store.BuildItem, string, error) {
+func decodeBuildItem(r *http.Request, projectID int64) (store.BuildItem, error) {
 	var req struct {
 		Name        string          `json:"name"`
 		SourceType  string          `json:"source_type"`
@@ -36,19 +37,19 @@ func decodeBuildItem(r *http.Request, projectID int64) (store.BuildItem, string,
 		PrereqJSON  json.RawMessage `json:"prereq_json"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return store.BuildItem{}, "", err
+		return store.BuildItem{}, err
 	}
 	if req.Name == "" || req.Command == "" {
-		return store.BuildItem{}, "", fmt.Errorf("name and command required")
+		return store.BuildItem{}, fmt.Errorf("name and command required")
 	}
 	if req.SourceType != "git" && req.SourceType != "local" {
-		return store.BuildItem{}, "", fmt.Errorf("source_type must be git or local")
+		return store.BuildItem{}, fmt.Errorf("source_type must be git or local")
 	}
 	if req.SourceType == "git" && req.GitURL == "" {
-		return store.BuildItem{}, "", fmt.Errorf("git source requires git_url")
+		return store.BuildItem{}, fmt.Errorf("git source requires git_url")
 	}
 	if req.SourceType == "local" && req.LocalPath == "" {
-		return store.BuildItem{}, "", fmt.Errorf("local source requires local_path")
+		return store.BuildItem{}, fmt.Errorf("local source requires local_path")
 	}
 	prereq := string(req.PrereqJSON)
 	if prereq == "" {
@@ -69,11 +70,7 @@ func decodeBuildItem(r *http.Request, projectID int64) (store.BuildItem, string,
 		VersionCmd:  req.VersionCmd,
 		PrereqJSON:  prereq,
 	}
-	raw, err := json.Marshal(req.Artifacts)
-	if err != nil {
-		return store.BuildItem{}, "", err
-	}
-	return it, string(raw), nil
+	return it, nil
 }
 
 func (h *coordinator) handleCreateBuildItem(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +79,7 @@ func (h *coordinator) handleCreateBuildItem(w http.ResponseWriter, r *http.Reque
 		writeErr(w, http.StatusBadRequest, "bad project id")
 		return
 	}
-	it, _, err := decodeBuildItem(r, pid)
+	it, err := decodeBuildItem(r, pid)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -112,6 +109,20 @@ func (h *coordinator) handleListBuildItems(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, items)
 }
 
+// handleListAllBuildItems returns every item across projects (the
+// prerequisite picker's source: prereq refs may cross projects, 2.1).
+func (h *coordinator) handleListAllBuildItems(w http.ResponseWriter, r *http.Request) {
+	items, err := h.store.ListAllBuildItems(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if items == nil {
+		items = []store.BuildItem{}
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
 func (h *coordinator) handleUpdateBuildItem(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -123,7 +134,7 @@ func (h *coordinator) handleUpdateBuildItem(w http.ResponseWriter, r *http.Reque
 		writeErr(w, http.StatusNotFound, "no such build item")
 		return
 	}
-	it, _, err := decodeBuildItem(r, existing.ProjectID)
+	it, err := decodeBuildItem(r, existing.ProjectID)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -188,6 +199,26 @@ func (h *coordinator) handleListBatches(w http.ResponseWriter, r *http.Request) 
 		batches = []store.Batch{}
 	}
 	writeJSON(w, http.StatusOK, batches)
+}
+
+// handleListBuildRecords returns a project's records newest first
+// (requirement 2.4 build history); one query instead of the per-batch walk
+// the frontend did before.
+func (h *coordinator) handleListBuildRecords(w http.ResponseWriter, r *http.Request) {
+	pid, err := strconv.ParseInt(r.URL.Query().Get("project_id"), 10, 64)
+	if err != nil || pid == 0 {
+		writeErr(w, http.StatusBadRequest, "project_id required")
+		return
+	}
+	records, err := h.store.RecordsForProject(r.Context(), pid)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if records == nil {
+		records = []store.BuildRecord{}
+	}
+	writeJSON(w, http.StatusOK, records)
 }
 
 func (h *coordinator) handleGetBatch(w http.ResponseWriter, r *http.Request) {
@@ -270,17 +301,14 @@ func (h *coordinator) handleBuildLogTail(w http.ResponseWriter, r *http.Request)
 			n = parsed
 		}
 	}
-	data, err := os.ReadFile(buildLogPath(h.dataDir, id))
+	// sessionlog.Tail reads backward chunk-wise: huge logs never load fully
+	// into memory (the same discipline as the session log tail, 3.3).
+	tail, err := sessionlog.Tail(buildLogPath(h.dataDir, id), n)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "no build log")
 		return
 	}
-	// Tail: keep the last n lines without loading logic beyond a split.
-	lines := splitLines(string(data))
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"tail": joinLines(lines)})
+	writeJSON(w, http.StatusOK, map[string]string{"tail": tail})
 }
 
 // deleteBuildRecordFiles removes the record's artifacts from disk
@@ -426,5 +454,8 @@ func (h *coordinator) handlePutSettings(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	// Live settings take effect immediately (requirement 1.6: the parallel
+	// cap applies to admissions from now on).
+	h.builds.applyMaxParallelSetting()
 	w.WriteHeader(http.StatusNoContent)
 }

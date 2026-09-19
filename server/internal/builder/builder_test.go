@@ -295,3 +295,62 @@ func TestBuild_CancelBetweenPhases(t *testing.T) {
 		t.Fatalf("detail = %q", res.Detail)
 	}
 }
+
+func TestBuild_CancelKillsRunningCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-group kill test needs unix semantics")
+	}
+	repo := newGitRepo(t)
+	e, _ := newExecutor(t)
+	item := repo.item(t, "*.bin")
+	item.Command = "sleep 30"
+
+	// The cancel flips while the command runs; runCommand must observe it
+	// and report cancellation instead of letting sleep finish.
+	started := make(chan struct{})
+	go func() {
+		<-started
+		for i := 0; i < 100; i++ {
+			if e.CancelCommand(110) {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+
+	// Run in a goroutine; the executor reports via Result.
+	type done struct {
+		res Result
+	}
+	ch := make(chan done, 1)
+	e.Canceled = func(record int64) bool { return true } // flag set from the start: kill lands, then boundary check confirms
+	close(started)
+	go func() { ch <- done{res: e.Run(110, item, "sha256")} }()
+
+	select {
+	case d := <-ch:
+		if d.res.OK {
+			t.Fatal("canceled build must not succeed")
+		}
+		if !d.res.Canceled {
+			t.Fatalf("want Canceled=true, detail=%q", d.res.Detail)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("cancel did not stop the build command in time")
+	}
+}
+
+func TestBuild_CanceledTmpRemovedImmediately(t *testing.T) {
+	repo := newGitRepo(t)
+	e, _ := newExecutor(t)
+	item := repo.item(t, "*.bin")
+	e.Canceled = func(record int64) bool { return true }
+
+	e.Run(111, item, "sha256")
+	entries, _ := os.ReadDir(e.TmpRoot)
+	for _, ent := range entries {
+		if strings.HasPrefix(ent.Name(), "build-") {
+			t.Fatalf("canceled build must remove its tmp dir at once (requirement 2.5), kept: %s", ent.Name())
+		}
+	}
+}

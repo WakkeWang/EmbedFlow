@@ -157,6 +157,30 @@ func (k *Kernel) NextIDs(batch, record int64) {
 	}
 }
 
+// MaxParallel returns the current concurrent-batch cap (the admin page's
+// effective-value display).
+func (k *Kernel) MaxParallel() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.maxParallel
+}
+
+// SetMaxParallel adjusts the concurrent-batch cap at runtime (the system
+// setting "max_parallel_batches": changes apply to admissions from now on;
+// already-running batches are not affected). Values <= 0 are ignored so a
+// corrupt setting cannot zero the scheduler. Raising the cap may admit
+// queued batches immediately; the returned events must be applied by the
+// caller (EventBatchAdmitted / EventRecordStart).
+func (k *Kernel) SetMaxParallel(n int) []Event {
+	if n <= 0 {
+		return nil
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.maxParallel = n
+	return k.pumpLocked()
+}
+
 // enqueuePlan computes the build set for a batch: selected items plus the
 // prerequisite closure, deduplicated, ordered so prerequisites come before
 // dependents (Kahn's algorithm with insertion-order tie-breaking).
@@ -369,7 +393,9 @@ func (k *Kernel) firstStartableLocked(b *Batch, graph map[ItemID]Item) *Event {
 	return nil
 }
 
-// statusOfLocked looks up an item's record status in the batch.
+// statusOfLocked looks up an item's record status in the batch. An id not
+// in the closure maps to RecSkipped -- for prereq gating that is exactly
+// the "dead" state: it can never succeed and never block an OR group.
 // Caller holds k.mu.
 func (k *Kernel) statusOfLocked(b *Batch, id ItemID) string {
 	for i := range b.Records {
@@ -494,6 +520,9 @@ func (k *Kernel) Cancel(batchID BatchID) []Event {
 			events = append(events, Event{Kind: EventRecordSkip, BatchID: batchID, RecordID: b.Records[i].RecordID, ItemID: b.Records[i].ItemID, Detail: RecCanceled})
 		}
 	}
+	// runningRecord marks the record whose build was executing; the
+	// executor's cancel flag (set before this call) is what actually stops
+	// it, and the orchestrator drops its late result via kernel.Active.
 	_ = runningRecord
 	b.Status = BatchCanceled
 	events = append(events, Event{Kind: EventBatchDone, BatchID: batchID, Terminal: BatchCanceled})
@@ -520,15 +549,6 @@ func (k *Kernel) Active(batchID BatchID) bool {
 	defer k.mu.Unlock()
 	_, ok := k.batches[batchID]
 	return ok
-}
-
-// Forget drops a terminal batch from kernel memory (records live in the
-// store; the kernel only tracks live work). Kept for symmetry with
-// NextIDs -- terminal paths already forget internally.
-func (k *Kernel) Forget(batchID BatchID) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	k.forgetLocked(batchID)
 }
 
 // String renders an event compactly for logs.

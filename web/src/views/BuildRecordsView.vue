@@ -17,13 +17,13 @@ import { h } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import {
-	batchApi,
 	buildRecordApi,
 	buildItemApi,
 	type BuildRecordRecord,
 	type ArtifactRecord,
 } from '../api/http'
 import { useProject } from '../store/project'
+import { statusType } from '../api/status'
 
 // Build records across batches (requirement 2.4): history, log with phase
 // segments, artifacts with checksums, delete with record/artifacts choice.
@@ -47,6 +47,21 @@ const withArtifacts = computed({
 	set: (v: boolean) => (deleteMode.value = v ? 'artifacts' : 'record'),
 })
 
+// Delete-all (requirement 2.4: 删除/全部删除) with the same mode choice.
+const showDeleteAll = ref(false)
+
+async function confirmDeleteAll() {
+	if (!currentId.value) return
+	try {
+		await buildRecordApi.removeAll(currentId.value, deleteMode.value)
+		showDeleteAll.value = false
+		await load()
+		message.success(t('common.confirm'))
+	} catch (e) {
+		message.error(String(e))
+	}
+}
+
 onMounted(async () => {
 	await load()
 	// Deep link: ?open=<id> (from the batch drawer's detail button).
@@ -62,24 +77,9 @@ async function load() {
 	try {
 		const items = await buildItemApi.list(currentId.value)
 		itemNames.value = Object.fromEntries(items.map((it) => [it.id, it.name]))
-		records.value = await fetchRecords()
+		records.value = await buildRecordApi.list(currentId.value)
 	} catch {
 		records.value = []
-	}
-}
-
-async function fetchRecords(): Promise<BuildRecordRecord[]> {
-	// Records are listed per batch; walk the project's batches.
-	try {
-		const batches = await batchApi.list(currentId.value)
-		const out: BuildRecordRecord[] = []
-		for (const b of batches) {
-			const res = await batchApi.get(b.id)
-			out.push(...res.records)
-		}
-		return out
-	} catch {
-		return []
 	}
 }
 
@@ -137,23 +137,6 @@ const logSegments = computed(() => {
 	return segs
 })
 
-function statusType(s: string): 'default' | 'info' | 'success' | 'error' | 'warning' {
-	switch (s) {
-		case 'pending':
-			return 'default'
-		case 'building':
-			return 'info'
-		case 'succeeded':
-			return 'success'
-		case 'failed':
-			return 'error'
-		case 'canceled':
-			return 'warning'
-		default:
-			return 'default'
-	}
-}
-
 function itemName(id: number): string {
 	return itemNames.value[id] ?? `#${id}`
 }
@@ -198,6 +181,12 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 	{ title: t('build.commit'), key: 'commit_sha', width: 120, render: (r) => (r.commit_sha ? r.commit_sha.slice(0, 8) : '-') },
 	{ title: t('history.start'), key: 'started_at', render: (r) => fmtTime(r.started_at) },
 	{
+		title: t('history.log'),
+		key: 'log',
+		width: 110,
+		render: (r) => h('a', { href: buildRecordApi.logDownloadURL(r.id), target: '_blank' }, t('history.download')),
+	},
+	{
 		title: '',
 		key: 'actions',
 		width: 170,
@@ -226,6 +215,9 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 	<div>
 		<div class="header-row">
 			<h2>{{ t('build.recordsTitle') }}</h2>
+			<NButton v-if="records.length > 0" size="small" quaternary type="error" @click="showDeleteAll = true">
+				{{ t('build.deleteAll') }}
+			</NButton>
 		</div>
 
 		<NEmpty v-if="records.length === 0" :description="t('build.recordsEmpty')" />
@@ -242,7 +234,12 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 					</div>
 					<pre v-if="detail.version_info" class="version-pre">{{ detail.version_info }}</pre>
 
-					<h3 class="sec-title">{{ t('history.log') }}</h3>
+					<h3 class="sec-title">
+						{{ t('history.log') }}
+						<a v-if="detail" class="log-dl" :href="buildRecordApi.logDownloadURL(detail.id)" target="_blank">
+							{{ t('history.download') }}
+						</a>
+					</h3>
 					<div v-if="logSegments.length === 0" class="hint">{{ t('history.noLog') }}</div>
 					<div v-for="(seg, si) in logSegments" :key="si" class="log-seg">
 						<NTag size="tiny" :bordered="false">{{ seg.phase }}</NTag>
@@ -273,6 +270,21 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 			<div v-if="deleteTarget">
 				<NCheckbox v-model:checked="withArtifacts" size="small">{{ t('build.deleteArtifacts') }}</NCheckbox>
 				<div class="hint" style="margin-top: 6px">{{ t('build.deleteHint') }}</div>
+			</div>
+		</NModal>
+
+		<NModal
+			:show="showDeleteAll"
+			preset="dialog"
+			:title="t('build.deleteAll')"
+			:positive-text="t('common.confirm')"
+			:negative-text="t('common.cancel')"
+			@positive-click="confirmDeleteAll"
+			@negative-click="showDeleteAll = false"
+		>
+			<div>
+				<NCheckbox v-model:checked="withArtifacts" size="small">{{ t('build.deleteArtifacts') }}</NCheckbox>
+				<div class="hint" style="margin-top: 6px">{{ t('build.deleteAllHint') }}</div>
 			</div>
 		</NModal>
 	</div>
@@ -312,6 +324,11 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 	font-size: 15px;
 	font-weight: 600;
 	margin: 14px 0 8px;
+}
+.log-dl {
+	font-size: 12.5px;
+	font-weight: 400;
+	margin-left: 10px;
 }
 .log-seg {
 	margin-bottom: 8px;

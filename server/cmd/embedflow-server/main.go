@@ -19,6 +19,7 @@ import (
 
 	"github.com/WakkeWang/EmbedFlow/pkg/protocol"
 	"github.com/WakkeWang/EmbedFlow/server/internal/authmw"
+	"github.com/WakkeWang/EmbedFlow/server/internal/builder"
 	"github.com/WakkeWang/EmbedFlow/server/internal/expect"
 	"github.com/WakkeWang/EmbedFlow/server/internal/paths"
 	"github.com/WakkeWang/EmbedFlow/server/internal/session"
@@ -90,6 +91,22 @@ func main() {
 	}()
 	defer ticker.Stop()
 
+	// Failed-build tmp sweep (requirement 2.5: 构建失败保留 7 天自动清理,
+	// the plan's every-10-minutes loop). First run starts immediately.
+	tmpRoot, err := hub.builds.tmpRoot()
+	if err != nil {
+		slog.Error("resolve tmp root", "err", err)
+		os.Exit(1)
+	}
+	go func() {
+		builder.CleanupSweep(tmpRoot, 7*24*time.Hour)
+		sweeper := time.NewTicker(10 * time.Minute)
+		defer sweeper.Stop()
+		for range sweeper.C {
+			builder.CleanupSweep(tmpRoot, 7*24*time.Hour)
+		}
+	}()
+
 	// Demo mode (CEO-18A): zero-hardware virtual device for GitHub visitors.
 	if *demo {
 		if err := hub.startDemoDevice(); err != nil {
@@ -159,19 +176,24 @@ func (h *coordinator) mux(frontDir string) http.Handler {
 	// batch and reading records/downloads are member-executable.
 	api.Handle("POST /api/projects/{pid}/build-items", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleCreateBuildItem)))
 	api.HandleFunc("GET /api/projects/{pid}/build-items", h.handleListBuildItems)
+	api.HandleFunc("GET /api/build-items", h.handleListAllBuildItems)
 	api.Handle("PUT /api/build-items/{id}", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleUpdateBuildItem)))
 	api.Handle("DELETE /api/build-items/{id}", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleDeleteBuildItem)))
 	api.HandleFunc("POST /api/batches", h.handleCreateBatch)
 	api.HandleFunc("GET /api/batches", h.handleListBatches)
 	api.HandleFunc("GET /api/batches/{id}", h.handleGetBatch)
 	api.HandleFunc("POST /api/batches/{id}/cancel", h.handleCancelBatch)
+	api.HandleFunc("GET /api/build-records", h.handleListBuildRecords)
 	api.HandleFunc("GET /api/build-records/{id}", h.handleGetBuildRecord)
 	api.HandleFunc("GET /api/build-records/{id}/artifacts", h.handleRecordArtifacts)
 	api.HandleFunc("GET /api/build-records/{id}/log/tail", h.handleBuildLogTail)
+	api.Handle("GET /api/build-records/{id}/log/download", buildLogDownloadHandler(h.dataDir))
 	api.HandleFunc("DELETE /api/build-records/{id}", h.handleDeleteBuildRecord)
 	api.HandleFunc("POST /api/build-records/delete-all", h.handleDeleteBuildRecordsAll)
 	api.HandleFunc("GET /api/artifacts/{id}/download", h.handleArtifactDownload)
-	api.Handle("GET /api/settings", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleGetSettings)))
+	// GET settings is login-only (members see effective values); PUT stays
+	// admin (requirement 1.5: members execute, admins configure).
+	api.HandleFunc("GET /api/settings", h.handleGetSettings)
 	api.Handle("PUT /api/settings", authmw.RequireAdmin(admin, http.HandlerFunc(h.handlePutSettings)))
 
 	api.HandleFunc("GET /api/me", h.handleMe)

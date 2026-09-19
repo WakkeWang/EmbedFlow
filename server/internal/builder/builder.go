@@ -43,7 +43,8 @@ const (
 type Notify func(recordID int64, phase, line string)
 
 // CancelFunc reports whether the record was canceled mid-run (the batch
-// kernel's cancel path flips it); checked between phases.
+// kernel's cancel path flips it); checked between phases. CancelCommand
+// actually kills a running build command (requirement 2.4: 取消 = 杀进程树).
 type CancelFunc func(recordID int64) bool
 
 // Executor runs single builds. One Run per record; the coordinator owns
@@ -56,9 +57,42 @@ type Executor struct {
 	Notify   Notify
 	Canceled CancelFunc
 
+	// liveCmds tracks the running build command per record so a cancel can
+	// kill the process tree mid-run (requirement 2.4), not just flag the
+	// next phase boundary.
+	mu       sync.Mutex
+	liveCmds map[int64]context.CancelFunc
+
 	// lastFailed is set when the build failed: the tmp dir is kept for the
 	// 7-day sweep instead of being removed immediately (requirement 2.5).
+	// Cancellation is NOT failure: the tmp dir is removed at once (2.5).
 	lastFailed bool
+}
+
+// NewExecutor creates an executor with its cancel registry initialized
+// (zero-value Executors only work for the old phase-boundary cancel path;
+// process-tree kill needs NewExecutor).
+func NewExecutor(dataDir, tmpRoot string, notify Notify, canceled CancelFunc) *Executor {
+	return &Executor{
+		DataDir:  dataDir,
+		TmpRoot:  tmpRoot,
+		Notify:   notify,
+		Canceled: canceled,
+		liveCmds: map[int64]context.CancelFunc{},
+	}
+}
+
+// CancelCommand kills the running build command for a record, if any.
+// Returns whether one was running.
+func (e *Executor) CancelCommand(recordID int64) bool {
+	e.mu.Lock()
+	cancel, ok := e.liveCmds[recordID]
+	e.mu.Unlock()
+	if !ok {
+		return false
+	}
+	cancel()
+	return true
 }
 
 // Result reports how one build ended.
@@ -68,6 +102,10 @@ type Result struct {
 	CommitSHA   string
 	VersionInfo string
 	ExitCode    *int
+	// Canceled is true when the run ended because of a cancel request: the
+	// executor must not overwrite the record's canceled state with
+	// succeeded/failed, and the tmp dir is removed at once (requirement 2.5).
+	Canceled bool
 	// Artifacts lists what archiveArtifacts stored (the caller persists
 	// the rows).
 	Artifacts []store.Artifact
@@ -160,7 +198,8 @@ func (w *logWriter) close() error {
 
 // Run executes one build record end to end. Phase order: clone -> dirty ->
 // command -> version -> artifact. Cancellation is honored at phase
-// boundaries and during the command (via context kill).
+// boundaries, during the command (context kill), and from CancelCommand
+// (process-tree kill).
 func (e *Executor) Run(recordID int64, item store.BuildItem, checksumSetting string) Result {
 	log, err := openBuildLog(e.DataDir, recordID, e.Notify)
 	if err != nil {
@@ -169,7 +208,7 @@ func (e *Executor) Run(recordID int64, item store.BuildItem, checksumSetting str
 	defer log.close()
 
 	res := e.run(recordID, item, checksumSetting, log)
-	e.lastFailed = !res.OK
+	e.lastFailed = !res.OK && !res.Canceled
 	log.line(PhaseSystem, "build "+map[bool]string{true: "succeeded", false: "failed"}[res.OK]+": "+res.Detail)
 	return res
 }
@@ -196,18 +235,23 @@ func (e *Executor) run(recordID int64, item store.BuildItem, checksumSetting str
 	log.line(PhaseClone, "source snapshot: "+sha)
 
 	if cancelled() {
-		return Result{Detail: "canceled"}
+		return Result{Detail: "canceled", Canceled: true}
 	}
 
 	// 4. Build command.
 	exitCode, cmdOK, detail := e.runCommand(recordID, item, buildDir, log)
 	if !cmdOK {
+		if cancelled() {
+			// The cancel killed the command: report cancellation, not a
+			// failure (the exit code is the kill's, not the build's).
+			return Result{Detail: "canceled", Canceled: true, CommitSHA: sha, ExitCode: &exitCode}
+		}
 		e.lastFailed = true
 		return Result{Detail: detail, CommitSHA: sha, ExitCode: &exitCode}
 	}
 
 	if cancelled() {
-		return Result{Detail: "canceled", CommitSHA: sha, ExitCode: &exitCode}
+		return Result{Detail: "canceled", Canceled: true, CommitSHA: sha, ExitCode: &exitCode}
 	}
 
 	// 5. Version extraction.
@@ -311,6 +355,24 @@ func (e *Executor) prepareSource(recordID int64, item store.BuildItem, tmpDir st
 				}
 			}
 		}
+		// Pinned commit (requirement 2.1: 可选 commit -- build this exact
+		// revision instead of the branch tip). Shallow clones may not carry
+		// the commit; unshallow best-effort, then checkout.
+		if item.GitCommit != "" {
+			want := strings.TrimSpace(item.GitCommit)
+			if out, err := runGitLogged(log, PhaseVerify, buildDir, "cat-file", "-e", want+"^{commit}"); err != nil {
+				if out2, uerr := runGitLogged(log, PhaseClone, buildDir, "fetch", "--unshallow", "origin"); uerr != nil {
+					return "", &Result{Detail: "fetch commit " + want + ": " + uerr.Error() + ": " + out2}
+				}
+				if out, err = runGitLogged(log, PhaseVerify, buildDir, "cat-file", "-e", want+"^{commit}"); err != nil {
+					return "", &Result{Detail: "commit not found in repo: " + want + ": " + out}
+				}
+			}
+			if out, err := runGitLogged(log, PhaseClone, buildDir, "checkout", "--detach", want); err != nil {
+				return "", &Result{Detail: "checkout commit " + want + ": " + err.Error() + ": " + out}
+			}
+			log.line(PhaseVerify, "pinned commit checked out: "+want)
+		}
 		return buildDir, nil
 
 	default:
@@ -320,13 +382,16 @@ func (e *Executor) prepareSource(recordID int64, item store.BuildItem, tmpDir st
 
 // runCommand executes item.Command in buildDir with the server's
 // environment (requirement 2.3: 继承系统运行环境). Returns (exitCode, ok).
+// The command's cancel func is registered in liveCmds: a user cancel kills
+// the whole process tree (requirement 2.4), not just this context.
 func (e *Executor) runCommand(recordID int64, item store.BuildItem, buildDir string, log *logWriter) (int, bool, string) {
 	log.line(PhaseCommand, "$ "+item.Command)
-	ctx := context.Background()
-	var cancel context.CancelFunc
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	if item.TimeoutSec > 0 {
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(item.TimeoutSec)*time.Second)
-		defer cancel()
+		var timeoutCancel context.CancelFunc
+		ctx, timeoutCancel = context.WithTimeout(ctx, time.Duration(item.TimeoutSec)*time.Second)
+		defer timeoutCancel()
 	}
 	cmd := exec.CommandContext(ctx, shellName(), shellArg(item.Command))
 	cmd.Dir = buildDir
@@ -334,13 +399,32 @@ func (e *Executor) runCommand(recordID int64, item store.BuildItem, buildDir str
 	// flow's bb.sh pattern spawns toolchains); Windows falls back to
 	// Process.Kill via CommandContext.
 	setPgid(cmd)
+	// ctx cancellation (timeout OR user cancel) reaps the whole group, not
+	// just the shell process.
+	cmd.Cancel = func() error { killProcessTree(cmd); return nil }
+
+	e.mu.Lock()
+	if e.liveCmds == nil {
+		e.liveCmds = map[int64]context.CancelFunc{}
+	}
+	e.liveCmds[recordID] = cancel
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		delete(e.liveCmds, recordID)
+		e.mu.Unlock()
+	}()
 
 	out, err := cmd.CombinedOutput()
 	scannerLines(out, func(l string) { log.line(PhaseCommand, l) })
 	if err != nil {
 		code := exitCodeOf(err)
 		if ctx.Err() != nil {
-			log.line(PhaseCommand, "build command timed out or canceled")
+			if cancelledByUser := e.Canceled != nil && e.Canceled(recordID); cancelledByUser {
+				log.line(PhaseCommand, "build command canceled")
+				return code, false, "canceled"
+			}
+			log.line(PhaseCommand, "build command timed out")
 			return code, false, fmt.Sprintf("build command timed out after %ds", item.TimeoutSec)
 		}
 		return code, false, fmt.Sprintf("build command failed (exit %d)", code)

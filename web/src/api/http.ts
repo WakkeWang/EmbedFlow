@@ -134,6 +134,9 @@ export interface BatchRecord {
 	status: 'queued' | 'running' | 'completed' | 'failed' | 'canceled'
 	items_json: string
 	created_by: string
+	created_at: string
+	started_at?: string
+	ended_at?: string
 }
 
 export interface BuildRecordRecord {
@@ -166,6 +169,7 @@ export interface UserRecord {
 
 export const buildItemApi = {
 	list: (projectId: number) => api<BuildItemRecord[]>(`/api/projects/${projectId}/build-items`),
+	listAll: () => api<BuildItemRecord[]>('/api/build-items'),
 	create: (projectId: number, item: Partial<BuildItemRecord>) =>
 		api<{ id: number }>(`/api/projects/${projectId}/build-items`, { method: 'POST', body: item }),
 	update: (id: number, item: Partial<BuildItemRecord>) =>
@@ -182,6 +186,7 @@ export const batchApi = {
 }
 
 export const buildRecordApi = {
+	list: (projectId: number) => api<BuildRecordRecord[]>(`/api/build-records?project_id=${projectId}`),
 	get: (id: number) => api<BuildRecordRecord>(`/api/build-records/${id}`),
 	artifacts: (id: number) => api<ArtifactRecord[]>(`/api/build-records/${id}/artifacts`),
 	logTail: (id: number, n = 2000) => api<{ tail: string }>(`/api/build-records/${id}/log/tail?n=${n}`),

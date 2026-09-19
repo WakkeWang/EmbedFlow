@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,22 +36,40 @@ type buildOrchestrator struct {
 	store  *store.Store
 	hub    *coordinator // for WS fan-out + data dir
 
-	mu       sync.Mutex
-	subs     map[int64]map[*transport.ClientConn]struct{} // batchID -> subscribers
-	cancels  map[int64]bool                               // recordID -> cancel requested
-	items    map[int64]map[int64]store.BuildItem          // batchID -> itemID -> item
-	itemName map[int64]string                             // itemID -> name (for events)
+	mu        sync.Mutex
+	subs      map[int64]map[*transport.ClientConn]struct{} // batchID -> subscribers
+	cancels   map[int64]bool                               // recordID -> cancel requested
+	liveExecs map[int64]*builder.Executor                  // recordID -> running build (cancel target)
+	itemName  map[int64]string                             // itemID -> name (for events)
 }
 
 func newBuildOrchestrator(k *batch.Kernel, st *store.Store, hub *coordinator) *buildOrchestrator {
-	return &buildOrchestrator{
-		kernel:  k,
-		store:   st,
-		hub:     hub,
-		subs:    map[int64]map[*transport.ClientConn]struct{}{},
-		cancels: map[int64]bool{},
-		items:   map[int64]map[int64]store.BuildItem{},
-		itemName: map[int64]string{},
+	o := &buildOrchestrator{
+		kernel:    k,
+		store:     st,
+		hub:       hub,
+		subs:      map[int64]map[*transport.ClientConn]struct{}{},
+		cancels:   map[int64]bool{},
+		liveExecs: map[int64]*builder.Executor{},
+		itemName:  map[int64]string{},
+	}
+	// Wire the system setting into the scheduler (requirement 1.6: admins
+	// set the max parallel batches; default 4 stands when unset).
+	o.applyMaxParallelSetting()
+	return o
+}
+
+// applyMaxParallelSetting reads max_parallel_batches and pushes it into the
+// kernel. Called at startup and after every settings PUT.
+func (b *buildOrchestrator) applyMaxParallelSetting() {
+	v, err := b.store.GetSetting(context.Background(), SettingMaxParallelBatches)
+	if err != nil || strings.TrimSpace(v) == "" {
+		return // default 4 stands
+	}
+	if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+		for _, ev := range b.kernel.SetMaxParallel(n) {
+			b.applyEvent(ev, int64(ev.BatchID), 0, "")
+		}
 	}
 }
 
@@ -104,12 +123,10 @@ func (b *buildOrchestrator) CreateBatch(ctx context.Context, projectID int64, se
 	if len(items) != len(selected) {
 		return 0, fmt.Errorf("some selected items do not exist")
 	}
-	// The kernel needs the full item universe for the closure; the project's
-	// items are the universe (prerequisites may reference cross-project ids
-	// only when M3 lands cross-project refs; M2 keeps closure within the
-	// project by construction -- a foreign id resolves to no record and the
-	// kernel treats it as skipped).
-	universe, err := b.store.ListBuildItemsByProject(ctx, projectID)
+	// The kernel needs the full item universe for the prerequisite closure:
+	// prerequisites may reference cross-project ids (requirement 2.1), so
+	// the universe is every item, not just this project's.
+	universe, err := b.store.ListAllBuildItems(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -131,7 +148,6 @@ func (b *buildOrchestrator) CreateBatch(ctx context.Context, projectID int64, se
 	_, events := b.kernel.Enqueue(plan, toBatchIDs(selected))
 
 	b.mu.Lock()
-	b.items[batchID] = indexItems(items, universe)
 	for _, it := range universe {
 		b.itemName[it.ID] = it.Name
 	}
@@ -222,17 +238,38 @@ func (b *buildOrchestrator) runRecord(batchID, projectID, recordID, itemID int64
 		return
 	}
 
-	ex := &builder.Executor{
-		DataDir:  b.hub.dataDir,
-		TmpRoot:  tmpRoot,
-		Notify:   b.notifyBuild,
-		Canceled: b.isCanceled,
-	}
+	ex := builder.NewExecutor(b.hub.dataDir, tmpRoot, b.notifyBuildFor(batchID), b.isCanceled)
+
+	// Remember the live executor so CancelBatch can kill the running
+	// command's process tree (requirement 2.4), not just set a flag.
+	b.mu.Lock()
+	b.liveExecs[recordID] = ex
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		delete(b.liveExecs, recordID)
+		b.mu.Unlock()
+	}()
+
 	res := ex.Run(recordID, item, checksumSetting)
+
+	// A cancel must win over the build's own outcome: the kernel already
+	// marked the record canceled and forgot the batch; writing
+	// succeeded/failed here would resurrect a dead record (requirement 2.4:
+	// canceled records keep their state). Late results for forgotten
+	// batches are dropped entirely.
+	if !b.kernel.Active(batch.BatchID(batchID)) || res.Canceled {
+		return
+	}
 
 	rec, err := b.store.GetBuildRecord(context.Background(), recordID)
 	if err != nil {
 		slog.Error("load record for done", "err", err)
+		return
+	}
+	// Re-check after the store round-trip: the cancel may have landed
+	// between the kernel check and here.
+	if rec.Status == batch.RecCanceled {
 		return
 	}
 	rec.CommitSHA = res.CommitSHA
@@ -271,15 +308,12 @@ func (b *buildOrchestrator) runRecord(batchID, projectID, recordID, itemID int64
 	}
 }
 
-// notifyBuild pushes streamed build log lines: the executor already wrote
-// the file; here we forward to WS subscribers. Phases ride in front of the
-// line so the UI can group without a second channel.
-func (b *buildOrchestrator) notifyBuild(recordID int64, phase, line string) {
-	rec, err := b.store.GetBuildRecord(context.Background(), recordID)
-	if err != nil {
-		return
+// notifyBuildFor binds the batch id once per run instead of querying the
+// record row for every log line (the review's per-line-SQL finding).
+func (b *buildOrchestrator) notifyBuildFor(batchID int64) builder.Notify {
+	return func(recordID int64, phase, line string) {
+		b.emit(batchID, recordID, "", "log", phase+": "+line)
 	}
-	b.emit(rec.BatchID, recordID, "", "log", phase+": "+line)
 }
 
 func (b *buildOrchestrator) isCanceled(recordID int64) bool {
@@ -304,14 +338,22 @@ func (b *buildOrchestrator) tmpRoot() (string, error) {
 	return filepath.Join(b.hub.dataDir, "tmp"), nil
 }
 
-// CancelBatch requests cancellation: kernel-level cancel events + per-record
-// cancel flags the executor checks between phases and during the command.
+// CancelBatch requests cancellation: kill running build commands' process
+// trees (requirement 2.4), set per-record cancel flags the executor checks
+// between phases, then let the kernel cancel the batch bookkeeping.
 func (b *buildOrchestrator) CancelBatch(batchID int64) error {
 	b.mu.Lock()
-	for _, rec := range b.recordsOf(batchID) {
+	buildingRecords := b.recordsOf(batchID)
+	for _, rec := range buildingRecords {
 		b.cancels[rec] = true
+		if ex, ok := b.liveExecs[rec]; ok {
+			// Kill the running command now: the build stops mid-run instead
+			// of at the next phase boundary.
+			ex.CancelCommand(rec)
+		}
 	}
 	b.mu.Unlock()
+
 	for _, ev := range b.kernel.Cancel(batch.BatchID(batchID)) {
 		b.applyEvent(ev, batchID, 0, "")
 	}
@@ -414,14 +456,6 @@ func (b *buildOrchestrator) emit(batchID int64, recordID int64, itemName, phase,
 
 // --- small helpers ---
 
-func indexItems(selected, universe []store.BuildItem) map[int64]store.BuildItem {
-	m := make(map[int64]store.BuildItem, len(universe))
-	for _, it := range universe {
-		m[it.ID] = it
-	}
-	return m
-}
-
 func toBatchIDs(ids []int64) []batch.ItemID {
 	out := make([]batch.ItemID, 0, len(ids))
 	for _, id := range ids {
@@ -463,9 +497,9 @@ func encodeJSONInts(ids []int64) string {
 	if len(ids) == 0 {
 		return "[]"
 	}
-	parts := make([]string, 0, len(ids))
-	for _, id := range ids {
-		parts = append(parts, fmt.Sprint(id))
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return "[]" // []int64 always marshals; unreachable in practice
 	}
-	return "[" + strings.Join(parts, ",") + "]"
+	return string(raw)
 }

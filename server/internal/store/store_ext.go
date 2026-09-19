@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 // User is an account (requirement 1.5): admin manages config, members
@@ -125,12 +123,11 @@ func (s *Store) AuthenticateUser(ctx context.Context, username, password string)
 		}
 		return User{}, fmt.Errorf("store: find user: %w", err)
 	}
-	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
+	if !verifyPassword(hash, password) {
 		return User{}, ErrBadCredentials
 	}
 	return u, nil
 }
-
 // ListDevices returns all registered devices in insertion order.
 func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT id, name, project FROM devices ORDER BY id")

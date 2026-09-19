@@ -130,6 +130,25 @@ func (s *Store) ListBuildItemsByProject(ctx context.Context, projectID int64) ([
 	return out, rows.Err()
 }
 
+// ListAllBuildItems returns every item across projects (batch-planning
+// universe: prerequisites may reference cross-project ids, requirement 2.1).
+func (s *Store) ListAllBuildItems(ctx context.Context) ([]BuildItem, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+buildItemCols+" FROM build_items ORDER BY id")
+	if err != nil {
+		return nil, fmt.Errorf("store: list all build items: %w", err)
+	}
+	defer rows.Close()
+	var out []BuildItem
+	for rows.Next() {
+		it, err := scanBuildItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
 // UpdateBuildItem overwrites the editable fields.
 func (s *Store) UpdateBuildItem(ctx context.Context, it BuildItem) error {
 	return s.enqueue(ctx, func() error {

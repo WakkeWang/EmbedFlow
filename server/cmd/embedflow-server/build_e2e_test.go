@@ -247,9 +247,10 @@ func TestBuildE2E_SettingsAPI(t *testing.T) {
 		t.Fatalf("defaults = %v", settings)
 	}
 
-	// Member cannot read or write settings.
-	if resp := apiCall(t, s, memberTok, "GET", "/api/settings", nil); resp.StatusCode != 403 {
-		t.Fatalf("member GET settings = %d, want 403", resp.StatusCode)
+	// Members read settings (effective values, plan B4: GET login-only) but
+	// cannot write them.
+	if resp := apiCall(t, s, memberTok, "GET", "/api/settings", nil); resp.StatusCode != 200 {
+		t.Fatalf("member GET settings = %d, want 200", resp.StatusCode)
 	}
 	if resp := apiCall(t, s, memberTok, "PUT", "/api/settings", map[string]string{"checksum": "md5"}); resp.StatusCode != 403 {
 		t.Fatalf("member PUT settings = %d, want 403", resp.StatusCode)
@@ -266,6 +267,11 @@ func TestBuildE2E_SettingsAPI(t *testing.T) {
 	v, _ := s.st.GetSetting(context.Background(), "max_parallel_batches")
 	if v != "2" {
 		t.Fatalf("setting persisted = %q", v)
+	}
+	// The setting is live: the scheduler cap follows it (requirement 1.6:
+	// changes apply to admissions from now on).
+	if got := s.hub.builds.kernel.MaxParallel(); got != 2 {
+		t.Fatalf("kernel max parallel = %d, want 2", got)
 	}
 }
 
