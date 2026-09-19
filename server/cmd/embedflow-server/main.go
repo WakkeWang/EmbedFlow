@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -123,20 +124,35 @@ func (h *coordinator) mux(frontDir string) http.Handler {
 	})))
 
 	// REST API: token-gated, except /api/login (the gate itself).
+	// Write-config endpoints additionally require the admin role
+	// (requirement 1.5: admins manage configuration, members execute).
+	//
+	// adminAPI holds the admin-only subtree; Go's ServeMux matches the more
+	// specific pattern first, so a POST /api/projects lands in adminAPI even
+	// though api also has a GET for the same path shape.
+	admin := func(tok string) (string, string, bool) { return h.tokens.validate(tok) }
 	api := http.NewServeMux()
+	api.Handle("POST /api/projects", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleCreateProject)))
+	api.Handle("DELETE /api/projects/{id}", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleDeleteProject)))
+	api.Handle("POST /api/devices", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleCreateDevice)))
+	api.Handle("DELETE /api/devices/{id}", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleDeleteDevice)))
+	api.Handle("POST /api/expect-rules", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleCreateRule)))
+	api.Handle("PUT /api/expect-rules/{id}", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleUpdateRule)))
+	api.Handle("DELETE /api/expect-rules/{id}", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleDeleteRule)))
+
+	// Account management (requirement 1.5: admins create accounts; every
+	// user may change their own password).
+	api.Handle("GET /api/users", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleListUsers)))
+	api.Handle("POST /api/users", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleCreateUser)))
+	api.HandleFunc("POST /api/users/self/password", h.handleChangeOwnPassword)
+	api.Handle("POST /api/users/{id}/password", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleResetPassword)))
+
 	api.HandleFunc("GET /api/me", h.handleMe)
 	api.HandleFunc("GET /api/projects", h.handleListProjects)
-	api.HandleFunc("POST /api/projects", h.handleCreateProject)
-	api.HandleFunc("DELETE /api/projects/{id}", h.handleDeleteProject)
 	api.HandleFunc("GET /api/devices", h.handleListDevices)
-	api.HandleFunc("POST /api/devices", h.handleCreateDevice)
-	api.HandleFunc("DELETE /api/devices/{id}", h.handleDeleteDevice)
 	api.HandleFunc("GET /api/devices/{id}/sessions", h.handleDeviceSessions)
 	api.HandleFunc("GET /api/expect-rules", h.handleListRules)
-	api.HandleFunc("POST /api/expect-rules", h.handleCreateRule)
 	api.HandleFunc("GET /api/expect-rules/{id}", h.handleGetRule)
-	api.HandleFunc("PUT /api/expect-rules/{id}", h.handleUpdateRule)
-	api.HandleFunc("DELETE /api/expect-rules/{id}", h.handleDeleteRule)
 	api.HandleFunc("GET /api/sessions/{id}", h.handleGetSession)
 	api.HandleFunc("POST /api/sessions/{id}/close", h.handleCloseSession)
 	api.HandleFunc("POST /api/sessions/{id}/confirm", h.handleInsertConfirm)
@@ -524,4 +540,103 @@ func (h *coordinator) handleLogTail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"tail": tail})
+}
+
+// --- account management (requirement 1.5: admins open accounts) ---
+
+func (h *coordinator) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := h.store.ListUsers(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if users == nil {
+		users = []store.UserWithID{}
+	}
+	writeJSON(w, http.StatusOK, users)
+}
+
+func (h *coordinator) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Role     string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Username == "" || req.Password == "" {
+		writeErr(w, http.StatusBadRequest, "username and password required")
+		return
+	}
+	if req.Role != "admin" && req.Role != "member" {
+		writeErr(w, http.StatusBadRequest, "role must be admin or member")
+		return
+	}
+	if err := h.store.CreateUser(r.Context(), req.Username, req.Password, req.Role); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// meID resolves the authenticated caller's user row (for self password
+// change); ok=false means the token was bad.
+func (h *coordinator) meID(r *http.Request) (int64, bool) {
+	user, _, ok := h.tokens.validate(bearerToken(r))
+	if !ok {
+		return 0, false
+	}
+	// tokens map to usernames; the id lookup goes through the users table.
+	u, err := h.store.AuthenticateUserByName(r.Context(), user)
+	if err != nil {
+		return 0, false
+	}
+	return u.ID, true
+}
+
+func (h *coordinator) handleChangeOwnPassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Old string `json:"old"`
+		New string `json:"new"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.New == "" {
+		writeErr(w, http.StatusBadRequest, "old and new required")
+		return
+	}
+	id, ok := h.meID(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if err := h.store.ChangeOwnPassword(r.Context(), id, req.Old, req.New); err != nil {
+		if errors.Is(err, store.ErrBadCredentials) {
+			writeErr(w, http.StatusForbidden, "wrong old password")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *coordinator) handleResetPassword(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Password == "" {
+		writeErr(w, http.StatusBadRequest, "password required")
+		return
+	}
+	if _, err := h.store.GetUserByID(r.Context(), id); err != nil {
+		writeErr(w, http.StatusNotFound, "no such user")
+		return
+	}
+	if err := h.store.UpdatePassword(r.Context(), id, req.Password); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

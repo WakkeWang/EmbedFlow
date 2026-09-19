@@ -93,9 +93,9 @@ type Confirmation struct {
 
 // CreateUser inserts an account with a bcrypt-hashed password.
 func (s *Store) CreateUser(ctx context.Context, username, password, role string) error {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := hashPassword(password)
 	if err != nil {
-		return fmt.Errorf("store: hash: %w", err)
+		return err
 	}
 	return s.enqueue(ctx, func() error {
 		_, err := s.db.ExecContext(ctx,

@@ -140,3 +140,44 @@ func TestSameOrigin_NoOriginAllowed(t *testing.T) {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 }
+
+func TestRequireAdmin_RoleGate(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	validate := func(tok string) (string, string, bool) {
+		switch tok {
+		case "tok-admin":
+			return "root", "admin", true
+		case "tok-member":
+			return "alice", "member", true
+		}
+		return "", "", false
+	}
+	srv := httptest.NewServer(RequireAdmin(validate, next))
+	defer srv.Close()
+
+	do := func(tok string) int {
+		req, _ := http.NewRequest("GET", srv.URL, nil)
+		if tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do: %v", err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := do("tok-admin"); got != http.StatusOK {
+		t.Fatalf("admin status = %d, want 200", got)
+	}
+	if got := do("tok-member"); got != http.StatusForbidden {
+		t.Fatalf("member status = %d, want 403", got)
+	}
+	if got := do("tok-bogus"); got != http.StatusUnauthorized {
+		t.Fatalf("bogus status = %d, want 401", got)
+	}
+	if got := do(""); got != http.StatusUnauthorized {
+		t.Fatalf("no-token status = %d, want 401", got)
+	}
+}

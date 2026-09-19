@@ -52,8 +52,14 @@ func (t *tokenRing) issue(user, role string) (string, error) {
 }
 
 // issueForTesting mints a token without going through login (tests only).
+// The role rides the token so role-gate tests exercise the real path.
 func (t *tokenRing) issueForTesting(user string) string {
-	tok, err := t.issue(user, "admin")
+	return t.issueForRole(user, "admin")
+}
+
+// issueForRole mints a test token with an explicit role.
+func (t *tokenRing) issueForRole(user, role string) string {
+	tok, err := t.issue(user, role)
 	if err != nil {
 		panic(err)
 	}

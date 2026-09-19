@@ -53,3 +53,27 @@ func SameOrigin(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// RequireAdmin gates a handler to admin-role tokens (requirement 1.5:
+// admins manage configuration, members execute). validate maps a bearer
+// token to (user, role, ok) -- the same shape the coordinator's token ring
+// already exposes.
+func RequireAdmin(validate func(token string) (user, role string, ok bool), next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tok := bearer(r)
+		if tok == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		_, role, ok := validate(tok)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if role != "admin" {
+			http.Error(w, "admin required", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

@@ -130,6 +130,72 @@ CREATE TABLE IF NOT EXISTS confirmations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_confirmations_session ON confirmations(session_id);
+
+CREATE TABLE IF NOT EXISTS build_items (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	project_id   INTEGER NOT NULL REFERENCES projects(id),
+	name         TEXT NOT NULL,
+	source_type  TEXT NOT NULL CHECK (source_type IN ('git','local')),
+	git_url      TEXT NOT NULL DEFAULT '',
+	git_branch   TEXT NOT NULL DEFAULT '',
+	git_commit   TEXT NOT NULL DEFAULT '',
+	check_latest INTEGER NOT NULL DEFAULT 0,
+	local_path   TEXT NOT NULL DEFAULT '',
+	command      TEXT NOT NULL,
+	artifacts_json TEXT NOT NULL DEFAULT '[]',
+	timeout_sec  INTEGER NOT NULL DEFAULT 0,
+	version_cmd  TEXT NOT NULL DEFAULT '',
+	prereq_json  TEXT NOT NULL DEFAULT '[]',
+	created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+	updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_build_items_project ON build_items(project_id);
+
+CREATE TABLE IF NOT EXISTS batches (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	project_id INTEGER NOT NULL REFERENCES projects(id),
+	status     TEXT NOT NULL CHECK (status IN ('queued','running','completed','failed','canceled')),
+	items_json TEXT NOT NULL DEFAULT '[]',
+	created_by TEXT NOT NULL,
+	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+	started_at TEXT NOT NULL DEFAULT '',
+	ended_at   TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_batches_project ON batches(project_id);
+
+CREATE TABLE IF NOT EXISTS build_records (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	batch_id     INTEGER NOT NULL REFERENCES batches(id),
+	item_id      INTEGER NOT NULL REFERENCES build_items(id),
+	project_id   INTEGER NOT NULL,
+	status       TEXT NOT NULL CHECK (status IN ('pending','building','succeeded','failed','canceled','skipped')),
+	commit_sha   TEXT NOT NULL DEFAULT '',
+	version_info TEXT NOT NULL DEFAULT '',
+	exit_code    INTEGER,
+	executor     TEXT NOT NULL DEFAULT '',
+	started_at   TEXT NOT NULL DEFAULT '',
+	ended_at     TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_build_records_batch ON build_records(batch_id);
+CREATE INDEX IF NOT EXISTS idx_build_records_project ON build_records(project_id);
+
+CREATE TABLE IF NOT EXISTS artifacts (
+	id              INTEGER PRIMARY KEY AUTOINCREMENT,
+	build_record_id INTEGER NOT NULL REFERENCES build_records(id),
+	name            TEXT NOT NULL,
+	size            INTEGER NOT NULL DEFAULT 0,
+	checksum        TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_artifacts_record ON artifacts(build_record_id);
+
+CREATE TABLE IF NOT EXISTS settings (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL DEFAULT ''
+);
 `
 	_, err := s.db.Exec(ddl)
 	if err != nil {
