@@ -13,6 +13,8 @@ export const Frame = {
 	SessionState: 8,
 	ExpectProgress: 9,
 	Confirm: 10,
+	BuildCtrl: 11,
+	BuildEvent: 12,
 } as const
 
 export type FrameType = (typeof Frame)[keyof typeof Frame]
@@ -63,6 +65,20 @@ export interface ConfirmFrame {
 	state: string
 	result?: string
 	note?: string
+}
+
+export interface BuildCtrlFrame {
+	command: 'subscribe' | 'unsubscribe'
+	batch_id: number
+}
+
+export interface BuildEventFrame {
+	batch_id: number
+	record_id?: number
+	item_name?: string
+	phase: string
+	detail?: string
+	log_line?: string
 }
 
 export type ControlBody =

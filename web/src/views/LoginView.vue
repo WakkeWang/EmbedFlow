@@ -5,6 +5,7 @@ import { NCard, NForm, NFormItem, NButton, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { ofetch } from 'ofetch'
 import { setToken } from '../api/http'
+import { setRole } from '../store/auth'
 import { useProject } from '../store/project'
 
 const { t } = useI18n()
@@ -22,11 +23,12 @@ const hasProjects = ref(true)
 async function submit() {
 	loading.value = true
 	try {
-		const res = await ofetch<{ token: string }>('/api/login', {
+		const res = await ofetch<{ token: string; role: string }>('/api/login', {
 			method: 'POST',
 			body: { username: username.value, password: password.value },
 		})
 		setToken(res.token)
+		setRole(res.role ?? 'member')
 		await load()
 		if (projects.value.length === 0 && newProjectName.value.trim()) {
 			await create(newProjectName.value.trim(), '')

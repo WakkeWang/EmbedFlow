@@ -1,0 +1,1 @@
+import{X as e,d as t}from"./vue-i18n-CU1juWHN.js";var n=`embedflow.role`,r=e(localStorage.getItem(n)??``);function i(e){r.value=e,localStorage.setItem(n,e)}function a(){return{role:r,isAdmin:t(()=>r.value===`admin`)}}export{a as n,i as t};

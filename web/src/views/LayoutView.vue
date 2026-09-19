@@ -15,14 +15,15 @@ const { load } = useProject()
 onMounted(load)
 
 // DS-1D evolved: the sidebar mirrors the requirement-1.6 organization —
-// one container (project) above, the four sections below.
+// one container (project) above, the four sections below. Settings is the
+// admin page (requirement 1.6); non-admins are redirected by the view.
 const menuOptions = computed(() => [
 	{ label: t('nav.dashboard'), key: '/' },
-	{ label: t('nav.build'), key: '/build' },
+	{ label: t('nav.build'), key: '/build/items' },
 	{ label: t('nav.deploy'), key: '/deploy/devices' },
 	{ label: t('nav.test'), key: '/test' },
 	{ label: t('nav.release'), key: '/release' },
-	{ label: t('nav.settings'), key: '/settings', disabled: true },
+	{ label: t('nav.settings'), key: '/settings' },
 ])
 
 function onMenu(key: string) {

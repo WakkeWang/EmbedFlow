@@ -18,7 +18,7 @@ const deleteTarget = ref<{ id: number; name: string } | null>(null)
 onMounted(load)
 
 const sections = [
-	{ key: 'build', path: '/build', glyph: 'hammer', state: 'M2' },
+	{ key: 'build', path: '/build/items', glyph: 'hammer', state: 'live' },
 	{ key: 'deploy', path: '/deploy/devices', glyph: 'chip', state: 'live' },
 	{ key: 'test', path: '/test', glyph: 'flask', state: 'M4' },
 	{ key: 'release', path: '/release', glyph: 'rocket', state: 'M5' },
@@ -91,7 +91,7 @@ function go(path: string) {
 								:type="s.state === 'live' ? 'success' : 'default'"
 								:bordered="false"
 							>
-								{{ s.state === 'live' ? 'M1' : s.state }}
+								{{ s.state === 'live' ? t('dashboard.live') : s.state }}
 							</NTag>
 						</div>
 						<div class="section-title">{{ t('dashboard.sections.' + s.key) }}</div>

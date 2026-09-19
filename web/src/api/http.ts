@@ -13,6 +13,8 @@ export function setToken(t: string) {
 
 export function clearToken() {
 	localStorage.removeItem(TOKEN_KEY)
+	// The role rides the token lifecycle (logout / 401 both clear it).
+	localStorage.removeItem('embedflow.role')
 }
 
 export const api = ofetch.create({
@@ -105,4 +107,103 @@ export const ruleApi = {
 	update: (id: number, name: string, steps: unknown) =>
 		api(`/api/expect-rules/${id}`, { method: 'PUT', body: { name, steps } }),
 	remove: (id: number) => api(`/api/expect-rules/${id}`, { method: 'DELETE' }),
+}
+
+// Build module (M2): build items, batches, records, artifacts, settings.
+
+export interface BuildItemRecord {
+	id: number
+	project_id: number
+	name: string
+	source_type: 'git' | 'local'
+	git_url?: string
+	git_branch?: string
+	git_commit?: string
+	check_latest?: boolean
+	local_path?: string
+	command: string
+	artifacts: string[]
+	timeout_sec?: number
+	version_cmd?: string
+	prereq_json: string
+}
+
+export interface BatchRecord {
+	id: number
+	project_id: number
+	status: 'queued' | 'running' | 'completed' | 'failed' | 'canceled'
+	items_json: string
+	created_by: string
+}
+
+export interface BuildRecordRecord {
+	id: number
+	batch_id: number
+	item_id: number
+	project_id: number
+	status: 'pending' | 'building' | 'succeeded' | 'failed' | 'canceled' | 'skipped'
+	commit_sha: string
+	version_info: string
+	exit_code?: number | null
+	executor: string
+	started_at: string
+	ended_at: string
+}
+
+export interface ArtifactRecord {
+	id: number
+	build_record_id: number
+	name: string
+	size: number
+	checksum: string
+}
+
+export interface UserRecord {
+	id: number
+	username: string
+	role: 'admin' | 'member'
+}
+
+export const buildItemApi = {
+	list: (projectId: number) => api<BuildItemRecord[]>(`/api/projects/${projectId}/build-items`),
+	create: (projectId: number, item: Partial<BuildItemRecord>) =>
+		api<{ id: number }>(`/api/projects/${projectId}/build-items`, { method: 'POST', body: item }),
+	update: (id: number, item: Partial<BuildItemRecord>) =>
+		api(`/api/build-items/${id}`, { method: 'PUT', body: item }),
+	remove: (id: number) => api(`/api/build-items/${id}`, { method: 'DELETE' }),
+}
+
+export const batchApi = {
+	create: (projectId: number, itemIds: number[]) =>
+		api<{ id: number }>('/api/batches', { method: 'POST', body: { project_id: projectId, item_ids: itemIds } }),
+	list: (projectId: number) => api<BatchRecord[]>(`/api/batches?project_id=${projectId}`),
+	get: (id: number) => api<{ batch: BatchRecord; records: BuildRecordRecord[] }>(`/api/batches/${id}`),
+	cancel: (id: number) => api(`/api/batches/${id}/cancel`, { method: 'POST' }),
+}
+
+export const buildRecordApi = {
+	get: (id: number) => api<BuildRecordRecord>(`/api/build-records/${id}`),
+	artifacts: (id: number) => api<ArtifactRecord[]>(`/api/build-records/${id}/artifacts`),
+	logTail: (id: number, n = 2000) => api<{ tail: string }>(`/api/build-records/${id}/log/tail?n=${n}`),
+	logDownloadURL: (id: number) => `/api/build-records/${id}/log/download?token=${encodeURIComponent(getToken())}`,
+	remove: (id: number, mode: 'record' | 'artifacts') =>
+		api(`/api/build-records/${id}?mode=${mode}`, { method: 'DELETE' }),
+	removeAll: (projectId: number, mode: 'record' | 'artifacts') =>
+		api('/api/build-records/delete-all', { method: 'POST', body: { project_id: projectId, mode } }),
+	artifactDownloadURL: (id: number) => `/api/artifacts/${id}/download?token=${encodeURIComponent(getToken())}`,
+}
+
+export const settingsApi = {
+	get: () => api<Record<string, string>>('/api/settings'),
+	put: (values: Record<string, string>) => api('/api/settings', { method: 'PUT', body: values }),
+}
+
+export const userApi = {
+	list: () => api<UserRecord[]>('/api/users'),
+	create: (username: string, password: string, role: string) =>
+		api('/api/users', { method: 'POST', body: { username, password, role } }),
+	changeOwnPassword: (oldpw: string, newpw: string) =>
+		api('/api/users/self/password', { method: 'POST', body: { old: oldpw, new: newpw } }),
+	resetPassword: (id: number, password: string) =>
+		api(`/api/users/${id}/password`, { method: 'POST', body: { password } }),
 }
