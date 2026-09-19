@@ -78,6 +78,12 @@ func (h *coordinator) startDemoDevice() error {
 			h.mu.Lock()
 			h.demoRuleID = r.ID
 			h.mu.Unlock()
+			// The build seed runs on the idempotent path too: a data dir
+			// seeded by a pre-M2 binary must gain the demo build item on
+			// upgrade, not only on first ever run.
+			if err := h.seedDemoBuildItem(devID); err != nil {
+				slog.Warn("demo build item", "err", err)
+			}
 			go h.attachVirtual(vd, devID)
 			return nil
 		}
