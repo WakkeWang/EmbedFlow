@@ -18,6 +18,58 @@ type User struct {
 	Role     string // admin | member
 }
 
+// Project is the top-level configuration container (requirement 1.6):
+// build items, deploy rules, devices, tests and release rules all live
+// inside one. M1 seeds the entity; its sections land M2+.
+type Project struct {
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	Note      string    `json:"note"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// CreateProject inserts a project, returning its id.
+func (s *Store) CreateProject(ctx context.Context, name, note string) (int64, error) {
+	var id int64
+	err := s.enqueue(ctx, func() error {
+		res, err := s.db.ExecContext(ctx,
+			"INSERT INTO projects (name, note) VALUES (?, ?)", name, note)
+		if err != nil {
+			return err
+		}
+		id, err = res.LastInsertId()
+		return err
+	})
+	return id, err
+}
+
+// ListProjects returns all projects in insertion order.
+func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id, name, note, created_at FROM projects ORDER BY id")
+	if err != nil {
+		return nil, fmt.Errorf("store: list projects: %w", err)
+	}
+	defer rows.Close()
+	var out []Project
+	for rows.Next() {
+		var p Project
+		if err := rows.Scan(&p.ID, &p.Name, &p.Note, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// DeleteProject removes a project record (sections M2+ cascade by design
+// when they hang entities off project_id).
+func (s *Store) DeleteProject(ctx context.Context, id int64) error {
+	return s.enqueue(ctx, func() error {
+		_, err := s.db.ExecContext(ctx, "DELETE FROM projects WHERE id = ?", id)
+		return err
+	})
+}
+
 // ExpectRule is a stored expect sequence (issue #7): team-shared,
 // reusable, reviewable configuration.
 type ExpectRule struct {

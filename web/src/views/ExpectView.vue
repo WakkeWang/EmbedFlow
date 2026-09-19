@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import {
 	NCard,
@@ -307,8 +307,8 @@ function appendSend(i: number, esc: string) {
 	align-items: center;
 }
 .step-grid label {
-	color: rgba(255, 255, 255, 0.65);
-	font-size: 12px;
+	color: rgba(0, 0, 0, 0.55);
+	font-size: 13px;
 }
 .mono {
 	font-family: 'JetBrains Mono', Consolas, monospace;
@@ -316,9 +316,9 @@ function appendSend(i: number, esc: string) {
 input.n-input,
 :deep(input.n-input) {
 	width: 100%;
-	padding: 5px 9px;
-	border-radius: 3px;
-	border: 1px solid rgba(255, 255, 255, 0.24);
+	padding: 6px 10px;
+	border-radius: 6px;
+	border: 1px solid rgba(0, 0, 0, 0.18);
 	background: transparent;
 	color: inherit;
 }
@@ -328,7 +328,7 @@ input.n-input,
 	margin-top: 4px;
 }
 .step-total {
-	color: rgba(255, 255, 255, 0.65);
+	color: rgba(0, 0, 0, 0.45);
 	font-size: 13px;
 }
 </style>

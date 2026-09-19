@@ -1,4 +1,4 @@
-// 中文文案（第一语言）。DS-1D：M1 四项导航：设备 / expect 规则 / 会话历史 / 设置。
+// 中文文案（第一语言）。导航按需求 1.6：工程为顶层容器，四大板块 + 系统。
 export const zh = {
 	login: {
 		title: '登录 EmbedFlow',
@@ -9,16 +9,54 @@ export const zh = {
 	},
 	nav: {
 		devices: '设备',
-		expect: 'expect 规则',
+		expect: '刷机规则',
 		history: '会话历史',
 		settings: '系统设置',
 		logout: '退出登录',
 		language: 'English',
+		dashboard: '概览',
+		build: '构建',
+		deploy: '部署',
+		test: '测试',
+		release: '发布',
+		projectNone: '未选择工程',
+		projectPicker: '切换工程',
+		deployDevices: '设备',
+		deployFlash: '刷机规则',
+		deploySessions: '会话历史',
+	},
+	dashboard: {
+		title: '概览',
+		empty: '还没有工程。创建第一个工程开始使用。',
+		hint: '工程是所有配置的顶层容器：构建项目、部署规则、设备、测试与发布规则都在工程内。',
+		sections: {
+			build: '构建',
+			deploy: '部署',
+			test: '测试',
+			release: '发布',
+		},
+		buildEmpty: 'M2 提供：构建项目、批次与记录',
+		deployHint: '设备与刷机规则在部署板块内',
+		testEmpty: 'M4 提供：测试用例单元/项/集合与运行报告',
+		releaseEmpty: 'M5 提供：发布规则与发布记录',
+	},
+	project: {
+		title: '工程',
+		list: '工程列表',
+		empty: '还没有工程',
+		emptyHint: '创建第一个工程（如产品线代号），工程下管理构建、部署、设备、测试与发布',
+		new: '新建工程',
+		name: '工程名',
+		desc: '备注（可选）',
+		create: '创建',
+		delete: '删除',
+		deleteConfirm: '确认删除该工程？工程下所有配置将不可访问。',
+		switchHint: '在左上角切换工程；所有板块都在当前工程内工作',
 	},
 	device: {
 		list: '设备列表',
-		empty: '还没有登记设备',
-		emptyHint: '在系统设置里登记第一台设备，或用 -demo 启动内置虚拟设备',
+		empty: '这台工程还没有登记设备',
+		emptyHint: '在部署板块的设备页登记第一台设备，或用 -demo 启动内置虚拟设备',
 		open: '开会话',
 		busy: '设备忙',
 		online: '在线',
@@ -46,8 +84,8 @@ export const zh = {
 		serialLinkRecovered: '串口链路已恢复',
 	},
 	expect: {
-		list: 'expect 规则',
-		empty: '还没有 expect 规则',
+		list: '刷机规则',
+		empty: '还没有刷机规则',
 		emptyHint: '新建一条规则，或从现有 VBS 脚本翻译录入',
 		new: '新建规则',
 		steps: '个步骤',
@@ -88,6 +126,7 @@ export const zh = {
 		backToList: '返回列表',
 		deleteRule: '删除规则',
 		deleteRuleConfirm: '确认删除该规则？删除后不可恢复。',
+		hint: '刷机规则 = expect 步骤序列（部署板块的刷机方式之一）；M3 起刷机部署还支持 SSH 等方式',
 	},
 	history: {
 		title: '会话历史',
@@ -100,6 +139,10 @@ export const zh = {
 		download: '下载完整日志',
 		viewTail: '查看尾部',
 		noLog: '暂无日志',
+	},
+	comingsoon: {
+		title: 'M{n} 提供',
+		body: '这个板块的功能在里程碑 M{n} 交付。当前页面是结构占位：导航与布局先定形，实体随里程碑落地。',
 	},
 	common: {
 		cancel: '取消',

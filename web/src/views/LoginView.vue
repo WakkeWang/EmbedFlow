@@ -5,27 +5,34 @@ import { NCard, NForm, NFormItem, NButton, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { ofetch } from 'ofetch'
 import { setToken } from '../api/http'
+import { useProject } from '../store/project'
 
 const { t } = useI18n()
 const router = useRouter()
 const message = useMessage()
+const { projects, load, create } = useProject()
 
 const username = ref('')
 const password = ref('')
 const loading = ref(false)
+// First-run form: when no project exists yet, offer to create one on login.
+const newProjectName = ref('')
+const hasProjects = ref(true)
 
 async function submit() {
 	loading.value = true
 	try {
-		// M1 interim: the server issues a session token on login. The
-		// endpoint lands with the auth slice; bootstrap flow uses the same
-		// shape (requirement 1.5: server-side session, cookie or token).
 		const res = await ofetch<{ token: string }>('/api/login', {
 			method: 'POST',
 			body: { username: username.value, password: password.value },
 		})
 		setToken(res.token)
-		router.push('/devices')
+		await load()
+		if (projects.value.length === 0 && newProjectName.value.trim()) {
+			await create(newProjectName.value.trim(), '')
+		}
+		hasProjects.value = projects.value.length > 0
+		router.push('/')
 	} catch {
 		message.error(t('login.error'))
 	} finally {
@@ -49,6 +56,9 @@ async function submit() {
 						data-testid="password"
 					/>
 				</NFormItem>
+				<NFormItem v-if="!hasProjects" :label="t('project.name')">
+					<input v-model="newProjectName" class="n-input" :placeholder="t('project.emptyHint')" />
+				</NFormItem>
 				<NButton type="primary" attr-type="submit" :loading="loading" block>
 					{{ t('login.submit') }}
 				</NButton>
@@ -63,16 +73,17 @@ async function submit() {
 	align-items: center;
 	justify-content: center;
 	height: 100vh;
-	background: #101014;
+	background: linear-gradient(160deg, #eef2fb 0%, #f6f7f9 55%, #e9eef8 100%);
 }
 .login-card {
-	width: 360px;
+	width: 380px;
+	border-radius: 16px;
 }
 input.n-input {
 	width: 100%;
-	padding: 6px 10px;
-	border-radius: 3px;
-	border: 1px solid rgba(255, 255, 255, 0.24);
+	padding: 8px 12px;
+	border-radius: 6px;
+	border: 1px solid rgba(0, 0, 0, 0.16);
 	background: transparent;
 	color: inherit;
 }

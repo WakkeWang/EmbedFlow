@@ -125,6 +125,9 @@ func (h *coordinator) mux(frontDir string) http.Handler {
 	// REST API: token-gated, except /api/login (the gate itself).
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/me", h.handleMe)
+	api.HandleFunc("GET /api/projects", h.handleListProjects)
+	api.HandleFunc("POST /api/projects", h.handleCreateProject)
+	api.HandleFunc("DELETE /api/projects/{id}", h.handleDeleteProject)
 	api.HandleFunc("GET /api/devices", h.handleListDevices)
 	api.HandleFunc("POST /api/devices", h.handleCreateDevice)
 	api.HandleFunc("DELETE /api/devices/{id}", h.handleDeleteDevice)
@@ -207,6 +210,48 @@ func bearerToken(r *http.Request) string {
 		return h[len(p):]
 	}
 	return r.URL.Query().Get("token")
+}
+
+func (h *coordinator) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	projects, err := h.store.ListProjects(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if projects == nil {
+		projects = []store.Project{}
+	}
+	writeJSON(w, http.StatusOK, projects)
+}
+
+func (h *coordinator) handleCreateProject(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+		Note string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		writeErr(w, http.StatusBadRequest, "name required")
+		return
+	}
+	id, err := h.store.CreateProject(r.Context(), req.Name, req.Note)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"id": id})
+}
+
+func (h *coordinator) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if err := h.store.DeleteProject(r.Context(), id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *coordinator) handleListDevices(w http.ResponseWriter, r *http.Request) {

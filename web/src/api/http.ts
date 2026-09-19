@@ -32,6 +32,13 @@ export const api = ofetch.create({
 	},
 })
 
+export interface ProjectRecord {
+	id: number
+	name: string
+	note: string
+	created_at: string
+}
+
 export interface Device {
 	id: number
 	name: string
@@ -61,6 +68,13 @@ export interface ExpectRuleRecord {
 	name: string
 	steps_json: string
 	updated_at: string
+}
+
+export const projectApi = {
+	list: () => api<ProjectRecord[]>('/api/projects'),
+	create: (name: string, note: string) =>
+		api<{ id: number }>('/api/projects', { method: 'POST', body: { name, note } }),
+	remove: (id: number) => api(`/api/projects/${id}`, { method: 'DELETE' }),
 }
 
 export const deviceApi = {

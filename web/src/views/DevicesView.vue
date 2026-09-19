@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
@@ -187,7 +187,7 @@ function elapsed(d: Device) {
 	margin-bottom: 12px;
 }
 .device-project {
-	color: rgba(255, 255, 255, 0.52);
+	color: rgba(0, 0, 0, 0.45);
 	font-size: 12px;
 }
 </style>

@@ -81,6 +81,13 @@ CREATE TABLE IF NOT EXISTS devices (
 	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+CREATE TABLE IF NOT EXISTS projects (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	name       TEXT NOT NULL UNIQUE,
+	note       TEXT NOT NULL DEFAULT '',
+	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
 	id             INTEGER PRIMARY KEY AUTOINCREMENT,
 	device_id      INTEGER NOT NULL REFERENCES devices(id),
