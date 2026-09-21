@@ -204,20 +204,20 @@ const artifactColumns = computed<DataTableColumns<ArtifactRecord>>(() => [
 ])
 
 const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
-	{ title: t('build.recordNo'), key: 'id', width: 70 },
-	{ title: t('build.batch'), key: 'batch_id', width: 80, render: (r) => `#${r.batch_id}` },
-	{ title: t('build.item'), key: 'item', width: 170, ellipsis: { tooltip: true }, render: (r) => itemName(r.item_id) },
+	{ title: t('build.recordNo'), key: 'id', width: 64 },
+	{ title: t('build.batch'), key: 'batch_id', width: 64, render: (r) => `#${r.batch_id}` },
+	{ title: t('build.item'), key: 'item', width: 150, ellipsis: { tooltip: true }, render: (r) => itemName(r.item_id) },
 	{
 		title: t('history.state'),
 		key: 'status',
-		width: 130,
+		width: 82,
 		render: (r) => h(NTag, { size: 'small', type: statusType(r.status) }, { default: () => t('build.rec_' + r.status) }),
 	},
-	{ title: t('build.branch'), key: 'branch', width: 140, render: (r) =>
+	{ title: t('build.branch'), key: 'branch', width: 110, render: (r) =>
 		h('span', { class: 'mono', style: 'font-size:12px' }, r.branch || '-') },
-	{ title: t('build.commitShort'), key: 'commit_sha', width: 120, render: (r) =>
+	{ title: t('build.commitShort'), key: 'commit_sha', width: 86, render: (r) =>
 		h('span', { class: 'mono', style: 'font-size:12px' }, r.commit_sha ? r.commit_sha.slice(0, 8) : '-') },
-	{ title: t('history.start'), key: 'started_at', width: 170, render: (r) => fmtTime(r.started_at) },
+	{ title: t('history.start'), key: 'started_at', width: 132, render: (r) => fmtTime(r.started_at) },
 	{
 		title: t('history.log'),
 		key: 'log',
@@ -245,9 +245,9 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 	{
 		title: '',
 		key: 'actions',
-		width: 170,
+		width: 108,
 		render: (r) =>
-			h(NSpace, { size: 4 }, {
+			h(NSpace, { size: 0, wrap: false, style: 'margin-left: -6px' }, {
 				default: () => [
 					h(NButton, { size: 'tiny', quaternary: true, onClick: () => openRecord(r) }, { default: () => t('build.detail') }),
 					h(
@@ -278,7 +278,14 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 
 		<NEmpty v-if="records.length === 0" :description="t('build.recordsEmpty')" />
 
-		<NDataTable v-else :columns="columns" :data="records" size="small" class="records-table" />
+		<NDataTable
+			v-else
+			:columns="columns"
+			:data="records"
+			size="small"
+			class="records-table"
+			:scroll-x="984"
+		/>
 
 		<NDrawer v-model:show="showDetail" :width="760">
 			<NDrawerContent :title="`${t('build.record')} #${detail?.id}`" closable>
@@ -386,7 +393,10 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 	margin-bottom: 12px;
 }
 .records-table {
-	max-width: 1080px;
+	/* The column set (record/batch/item/status/branch/commit/start/log/
+	   artifacts/actions) sums past 1200px: no cap, the outer scroll owns
+	   narrow viewports. */
+	max-width: none;
 }
 .meta {
 	display: flex;

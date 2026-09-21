@@ -195,6 +195,7 @@ export const zh = {
 		downloadArtifacts: '下载',
 		logView: '查看',
 		recordNo: '记录',
+		selectAll: '全选',
 		deleteSelected: '删除选中 ({n})',
 		deleteBatchesTitle: '删除选中的批次？',
 		deleteBatchesBody: '批次 {n} 及其全部构建记录、产物与日志文件将一并删除，不可恢复。',

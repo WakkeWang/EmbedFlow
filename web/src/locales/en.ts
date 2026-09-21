@@ -195,6 +195,7 @@ export const en = {
 		downloadArtifacts: 'download',
 		logView: 'view',
 		recordNo: 'Record',
+		selectAll: 'Select all',
 		deleteSelected: 'Delete selected ({n})',
 		deleteBatchesTitle: 'Delete the selected batches?',
 		deleteBatchesBody: 'Batch {n} with all its records, artifacts and log files will be removed. This cannot be undone.',
