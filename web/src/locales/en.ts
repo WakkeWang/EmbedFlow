@@ -202,6 +202,7 @@ export const en = {
 		prereqHint: 'Prerequisite groups: any item in a group succeeding satisfies it (OR); all groups must be satisfied (AND). Dependents of a dead group are skipped.',
 		groupN: 'Group {n}',
 		groupOr: 'OR within group',
+		groupAnd: 'AND across groups: this group must also pass for the item to build',
 		groupEmpty: 'empty group (never satisfied)',
 		addGroup: 'Add group',
 		pickPrereq: 'Pick a prerequisite (this project)',

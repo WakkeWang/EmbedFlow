@@ -1,4 +1,4 @@
-import{P as e,W as t,d as n,f as r,h as i,p as a,vt as o,y as s}from"./vue-i18n-CU1juWHN.js";import{Ct as c,E as l,P as u,St as d,gt as f,h as p,ht as m,k as h,l as g,m as _,mt as v,s as y,vt as b,xt as x,yt as S}from"./light-uQ0rL05w.js";import{A as C,B as w,C as T,F as E,P as D,U as O}from"./http-LAjieWQw.js";import{T as k}from"./index-D4n6YIu-.js";var A=f(`card-content`,`
+import{P as e,W as t,d as n,f as r,h as i,p as a,vt as o,y as s}from"./vue-i18n-CU1juWHN.js";import{Ct as c,E as l,P as u,St as d,gt as f,h as p,ht as m,k as h,l as g,m as _,mt as v,s as y,vt as b,xt as x,yt as S}from"./light-uQ0rL05w.js";import{A as C,B as w,C as T,F as E,P as D,U as O}from"./http-LAjieWQw.js";import{T as k}from"./index-vIS8Nv27.js";var A=f(`card-content`,`
  flex: 1;
  min-width: 0;
  box-sizing: border-box;

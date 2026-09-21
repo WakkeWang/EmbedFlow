@@ -350,22 +350,30 @@ const sourceOptions = [
 
 			<NCard size="small" :title="t('build.prereqs')" class="form-card">
 				<div class="hint prereq-hint">{{ t('build.prereqHint') }}</div>
-				<div v-for="(g, gi) in editor.prereqGroups" :key="gi" class="prereq-group">
-					<div class="prereq-head">
-						<NTag size="small" type="info">{{ t('build.groupN', { n: gi + 1 }) }}</NTag>
-						<span class="hint">{{ t('build.groupOr') }}</span>
-						<NButton size="tiny" quaternary @click="openPicker(gi)">+</NButton>
-						<NButton size="tiny" quaternary type="error" @click="removeGroup(gi)">
-							{{ t('expect.delete') }}
-						</NButton>
+				<template v-for="(g, gi) in editor.prereqGroups" :key="gi">
+					<!-- Between groups the relation is AND: show the connector
+					     before every group but the first. -->
+					<div v-if="gi > 0" class="prereq-and">
+						<span class="and-badge">AND</span>
+						<span class="hint">{{ t('build.groupAnd') }}</span>
 					</div>
-					<div class="prereq-items">
-						<NTag v-for="(pid, pi) in g" :key="pid" size="small" closable @close="removePrereq(gi, pi)">
-							{{ prereqName(pid) }}
-						</NTag>
-						<span v-if="g.length === 0" class="hint">{{ t('build.groupEmpty') }}</span>
+					<div class="prereq-group">
+						<div class="prereq-head">
+							<NTag size="small" type="info">{{ t('build.groupN', { n: gi + 1 }) }}</NTag>
+							<span class="hint">{{ t('build.groupOr') }}</span>
+							<NButton size="tiny" quaternary @click="openPicker(gi)">+</NButton>
+							<NButton size="tiny" quaternary type="error" @click="removeGroup(gi)">
+								{{ t('expect.delete') }}
+							</NButton>
+						</div>
+						<div class="prereq-items">
+							<NTag v-for="(pid, pi) in g" :key="pid" size="small" closable @close="removePrereq(gi, pi)">
+								{{ prereqName(pid) }}
+							</NTag>
+							<span v-if="g.length === 0" class="hint">{{ t('build.groupEmpty') }}</span>
+						</div>
 					</div>
-				</div>
+				</template>
 				<NButton size="small" @click="addGroup">{{ t('build.addGroup') }}</NButton>
 			</NCard>
 
@@ -466,6 +474,21 @@ textarea.n-input {
 	border-radius: 8px;
 	padding: 8px 12px;
 	margin-bottom: 8px;
+}
+.prereq-and {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 2px 0 8px;
+}
+.and-badge {
+	background: rgba(47, 107, 255, 0.12);
+	color: #1f52d6;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.5px;
+	border-radius: 4px;
+	padding: 2px 6px;
 }
 .prereq-head {
 	display: flex;

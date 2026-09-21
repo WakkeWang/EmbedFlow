@@ -202,6 +202,7 @@ export const zh = {
 		prereqHint: '前置分组：组内任一成功即可（OR），全部组成功才构建本项目（AND）。前置失败的本项目跳过。',
 		groupN: '组 {n}',
 		groupOr: '组内 OR',
+		groupAnd: '组间 AND：下面这组也要满足，本项目才会构建',
 		groupEmpty: '空组（恒不满足）',
 		addGroup: '添加组',
 		pickPrereq: '选择前置项目（本项目内）',
