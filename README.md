@@ -81,12 +81,12 @@ pkg/protocol/       shared wire protocol
 server/             Go server (kernel, executors, REST+WS API, demo device)
 serial-client/      Windows serial tunnel client (core + CLI; Wails GUI planned)
 web/                Vue3 + Naive UI frontend
-docs/               requirements, design, ADRs
+docs/               requirements (需求文档.md), design + decision log, ADRs
 ```
 
 ## Roadmap
 
-M1 (session layer) and M2 (build module) are done: sessions, logs, expect runs, human confirmations, build items, batches, records and artifacts, plus the virtual demo device covering both. Next: deploy module with SSH and flash rules per project (M3), test module with reports (M4), release module (M5). See `docs/designs/office-hours-design.md` for the full design and decision log.
+M1 (session layer) and M2 (build module) are done: sessions, logs, expect runs, human confirmations, build items, batches, records and artifacts, plus the virtual demo device covering both. Next: deploy module with SSH and flash rules per project (M3), test module with reports (M4), release module (M5). See `docs/designs/office-hours-design.md` for the full design and decision log, and `docs/adr/` for architecture decisions (ID minting, log formatting, i18n discipline, embedded-dist deploy flow).
 
 ## License
 
@@ -170,7 +170,7 @@ cd web && npm run dev      # Vite dev server（带 API 代理）
 
 ## 路线图
 
-M1（会话层）与 M2（构建模块）已完成：会话、日志、expect 执行、人为确认、构建项目、批次、构建记录与产物，虚拟演示设备同时覆盖刷机与构建。后续：SSH 部署模块与工程级刷机规则（M3）、测试模块与报告（M4）、发布模块（M5）。完整设计与决策记录见 `docs/designs/office-hours-design.md`。
+M1（会话层）与 M2（构建模块）已完成：会话、日志、expect 执行、人为确认、构建项目、批次、构建记录与产物，虚拟演示设备同时覆盖刷机与构建。后续：SSH 部署模块与工程级刷机规则（M3）、测试模块与报告（M4）、发布模块（M5）。完整设计与决策记录见 `docs/designs/office-hours-design.md`，架构决策（ID 发放、日志格式、i18n 纪律、嵌入式 dist 部署流程）见 `docs/adr/`。
 
 ## 许可证
 
