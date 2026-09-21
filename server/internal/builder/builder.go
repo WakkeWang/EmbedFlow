@@ -626,12 +626,26 @@ func runGitLogged(log *logWriter, phase, dir string, args ...string) (string, er
 	return text, err
 }
 
-// scannerLines feeds non-empty lines of out to fn.
+// scannerLines feeds non-empty lines of out to fn. Git progress output
+// ("Updating files: x% ...") is a single \n-terminated line whose frames
+// are \r-separated, so \r must split lines too -- otherwise one giant
+// carriage-return-glued blob lands in the log and renders as one line.
+// The intermediate frames carry no information, so a \r-run is collapsed
+// to its last frame: "100%, done." is what a human needs, not 100
+// percentage ticks.
 func scannerLines(out []byte, fn func(string)) {
-	for _, l := range strings.Split(string(out), "\n") {
-		l = strings.TrimRight(l, "\r")
-		if l != "" {
-			fn(l)
+	for _, chunk := range strings.Split(string(out), "\n") {
+		lines := strings.Split(chunk, "\r")
+		last := ""
+		for _, l := range lines {
+			// Strip \r residue only -- git's " * branch" lines keep their
+			// leading space (TrimSpace would eat it).
+			if l = strings.Trim(l, "\r"); l != "" {
+				last = l
+			}
+		}
+		if last != "" {
+			fn(last)
 		}
 	}
 }

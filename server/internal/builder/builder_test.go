@@ -138,6 +138,35 @@ func TestBuild_CleanHappyPath(t *testing.T) {
 	}
 }
 
+// Git progress output ("Updating files: x% (n/m)") refreshes one logical
+// line via \r frames with a single trailing \n. The \r-run must not glue
+// into one blob (the 0.80 "log 不换行" report), and the intermediate
+// percentage frames carry no information: only the LAST frame of each
+// \r-run lands in the log.
+func TestScannerLines_CarriageReturnFrames(t *testing.T) {
+	var got []string
+	scannerLines([]byte("Updating files:   6% (44/725)\rUpdating files:  50% (363/725)\rUpdating files: 100% (725/725), done.\nsource snapshot: e6a4cc53\nFrom ssh://git\n * branch            wangyf/release -> FETCH_HEAD\n"), func(l string) {
+		got = append(got, l)
+	})
+	want := []string{
+		"Updating files: 100% (725/725), done.",
+		"source snapshot: e6a4cc53",
+		"From ssh://git",
+		" * branch            wangyf/release -> FETCH_HEAD",
+	}
+	if got[3] != want[3] {
+		t.Fatalf("leading space must survive: got %q want %q", got[3], want[3])
+	}
+	if len(got) != len(want) {
+		t.Fatalf("lines = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("line %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestBuild_DirtyRefused(t *testing.T) {
 	repo := newGitRepo(t)
 	e, _ := newExecutor(t)
