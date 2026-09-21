@@ -124,6 +124,22 @@ async function openArtifacts(r: BuildRecordRecord) {
 	}
 }
 
+// Log viewer modal (0.80 feedback: view in the web, download from there).
+const logOpen = ref(false)
+const logFor = ref<BuildRecordRecord | null>(null)
+const logViewText = ref('')
+
+async function openLogView(r: BuildRecordRecord) {
+	logFor.value = r
+	logViewText.value = t('history.noLog')
+	logOpen.value = true
+	try {
+		logViewText.value = (await buildRecordApi.logTail(r.id)).tail
+	} catch {
+		logViewText.value = ''
+	}
+}
+
 async function confirmDelete() {
 	if (!deleteTarget.value) return
 	try {
@@ -136,22 +152,25 @@ async function confirmDelete() {
 	}
 }
 
-const logSegments = computed(() => {
-	// Group log lines by phase tag: "<ts> [phase] content".
+// Group log lines by phase tag: "<ts> [phase] content".
+function segmentLog(text: string): { phase: string; lines: string[] }[] {
 	const segs: { phase: string; lines: string[] }[] = []
-	for (const line of (logText.value || '').split('\n')) {
+	for (const line of (text || '').split('\n')) {
 		const m = line.match(/^\S+ \S+ \[([a-z]+)\] (.*)$/)
 		const phase = m?.[1] ?? 'other'
-		const text = m?.[2] ?? line
+		const segText = m?.[2] ?? line
 		const last = segs[segs.length - 1]
 		if (last && last.phase === phase) {
-			last.lines.push(text)
+			last.lines.push(segText)
 		} else {
-			segs.push({ phase, lines: [text] })
+			segs.push({ phase, lines: [segText] })
 		}
 	}
 	return segs
-})
+}
+
+const logSegments = computed(() => segmentLog(logText.value))
+const logViewSegments = computed(() => segmentLog(logViewText.value))
 
 function itemName(id: number): string {
 	return itemNames.value[id] ?? `#${id}`
@@ -201,7 +220,7 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 		title: t('history.log'),
 		key: 'log',
 		width: 90,
-		render: (r) => h('a', { href: buildRecordApi.logDownloadURL(r.id), target: '_blank' }, t('build.logView')),
+		render: (r) => h(NButton, { size: 'tiny', quaternary: true, onClick: () => openLogView(r) }, { default: () => t('build.logView') }),
 	},
 	{
 		// Artifacts quick download (0.80 feedback): one click lists the
@@ -334,6 +353,26 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 				</div>
 			</div>
 			<div v-else class="hint">{{ t('build.noArtifacts') }}</div>
+		</NModal>
+
+		<!-- log viewer (the records table's 查看 column) -->
+		<NModal
+			:show="logOpen"
+			preset="card"
+			:title="`${t('history.log')} - ${t('build.record')} #${logFor?.id ?? ''}`"
+			style="width: 760px"
+			@update:show="logOpen = $event"
+		>
+			<template #header-extra>
+				<a class="log-dl" :href="logFor ? buildRecordApi.logDownloadURL(logFor.id) : ''" target="_blank">
+					{{ t('history.download') }}
+				</a>
+			</template>
+			<div v-if="logViewSegments.length === 0" class="hint">{{ t('history.noLog') }}</div>
+			<div v-for="(seg, si) in logViewSegments" :key="si" class="log-seg">
+				<NTag size="tiny" :bordered="false">{{ seg.phase }}</NTag>
+				<pre class="log-pre">{{ seg.lines.join('\n') }}</pre>
+			</div>
 		</NModal>
 	</div>
 </template>
