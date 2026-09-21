@@ -341,7 +341,7 @@ const detailHasUSB = computed(() => {
 		</div>
 
 		<!-- trigger modal -->
-		<NModal :show="showTrigger" preset="dialog" :title="t('deploy.trigger')" :show-icon="false" style="width: 560px">
+		<NModal :show="showTrigger" preset="dialog" :title="t('deploy.trigger')" :show-icon="false" style="width: 560px" @update:show="showTrigger = $event">
 			<div class="form-grid">
 				<label>{{ t('deploy.pickRule') }}</label>
 				<NSelect v-model:value="trigRule" :options="ruleOptions" />

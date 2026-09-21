@@ -80,7 +80,15 @@ function emptyVM(): VM {
 function toVM(it: BuildItemRecord): VM {
 	let groups: number[][] = []
 	try {
-		groups = JSON.parse(it.prereq_json || '[]') as number[][]
+		const parsed = JSON.parse(it.prereq_json || '[]')
+		// Historical rows may carry a double-encoded value (a JSON string
+		// wrapping the array); unwrap once, then enforce the array shape.
+		if (Array.isArray(parsed)) {
+			groups = parsed
+		} else if (typeof parsed === 'string') {
+			const inner = JSON.parse(parsed)
+			if (Array.isArray(inner)) groups = inner
+		}
 	} catch {
 		groups = []
 	}
@@ -231,7 +239,10 @@ function pickPrereq(id: number) {
 }
 
 function removePrereq(gi: number, pi: number) {
-	editor.value?.prereqGroups[gi].splice(pi, 1)
+	const g = editor.value?.prereqGroups[gi]
+	if (Array.isArray(g)) {
+		g.splice(pi, 1)
+	}
 }
 
 function prereqName(id: number): string {
@@ -358,7 +369,7 @@ const sourceOptions = [
 				<NButton size="small" @click="addGroup">{{ t('build.addGroup') }}</NButton>
 			</NCard>
 
-			<NModal :show="prereqPickerOpen" preset="dialog" :title="t('build.pickPrereq')" :show-icon="false">
+			<NModal :show="prereqPickerOpen" preset="dialog" :title="t('build.pickPrereq')" :show-icon="false" @update:show="prereqPickerOpen = $event">
 				<NSelect :options="pickerOptions" @update:value="(v: number) => pickPrereq(v)" />
 			</NModal>
 		</div>

@@ -152,7 +152,7 @@ function renderActions(r: SessionRecord) {
 		</NDrawer>
 
 		<!-- Log tail preview (requirement 3.3: last N lines in the web view). -->
-		<NModal :show="showTail" preset="card" :title="`${t('history.log')} #${tailSession}`" style="width: 720px">
+		<NModal :show="showTail" preset="card" :title="`${t('history.log')} #${tailSession}`" style="width: 720px" @update:show="showTail = $event">
 			<pre class="tail-pre">{{ tailText }}</pre>
 		</NModal>
 	</div>

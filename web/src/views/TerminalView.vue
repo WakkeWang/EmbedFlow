@@ -348,7 +348,7 @@ function resolveCard(card: ConfirmCard, result: 'pass' | 'fail') {
 			</div>
 		</div>
 
-		<NModal :show="showConfirmDialog" preset="dialog" :title="t('terminal.newConfirmCard')" :show-icon="false">
+		<NModal :show="showConfirmDialog" preset="dialog" :title="t('terminal.newConfirmCard')" :show-icon="false" @update:show="showConfirmDialog = $event">
 			<NInput v-model:value="confirmPrompt" placeholder="e.g. LED on? / LED 是否亮" @keyup.enter="insertConfirm" />
 			<template #action>
 				<NButton @click="showConfirmDialog = false">{{ t('common.cancel') }}</NButton>

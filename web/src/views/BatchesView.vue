@@ -48,16 +48,26 @@ function closureOf(selectedIds: number[]): number[] {
 		seen.add(id)
 		const it = byId.get(id)
 		if (!it) return
-		let groups: number[][] = []
-		try {
-			groups = JSON.parse(it.prereq_json || '[]') as number[][]
-		} catch {
-			groups = []
-		}
-		for (const g of groups) for (const p of g) walk(p)
+		for (const g of parsePrereqGroups(it.prereq_json)) for (const p of g) walk(p)
 	}
 	for (const id of selectedIds) walk(id)
 	return [...seen]
+}
+
+// Tolerant prereq parse: historical rows may carry a double-encoded value
+// (a JSON string wrapping the array).
+function parsePrereqGroups(raw: string | undefined): number[][] {
+	try {
+		const parsed = JSON.parse(raw || '[]')
+		if (Array.isArray(parsed)) return parsed
+		if (typeof parsed === 'string') {
+			const inner = JSON.parse(parsed)
+			if (Array.isArray(inner)) return inner
+		}
+	} catch {
+		/* fall through */
+	}
+	return []
 }
 
 const closurePreview = computed(() => closureOf(checked.value))
@@ -306,7 +316,14 @@ const itemOptions = computed(() =>
 			</NCard>
 		</template>
 
-		<NModal :show="showDetail" preset="card" :title="`${t('build.batch')} #${detailBatch?.id}`" style="width: 760px" @after-leave="closeDetail">
+		<NModal
+			:show="showDetail"
+			preset="card"
+			:title="`${t('build.batch')} #${detailBatch?.id}`"
+			style="width: 760px"
+			@update:show="showDetail = $event"
+			@after-leave="closeDetail"
+		>
 			<NDataTable :columns="detailColumns" :data="detailRecords" size="small" />
 			<!-- Live log lines (requirement 2.4: WebSocket-pushed build log).
 			     The full log stays one download away in the record drawer. -->

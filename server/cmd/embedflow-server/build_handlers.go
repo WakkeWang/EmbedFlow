@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/WakkeWang/EmbedFlow/server/internal/batch"
 	"github.com/WakkeWang/EmbedFlow/server/internal/sessionlog"
@@ -51,10 +52,10 @@ func decodeBuildItem(r *http.Request, projectID int64) (store.BuildItem, error) 
 	if req.SourceType == "local" && req.LocalPath == "" {
 		return store.BuildItem{}, fmt.Errorf("local source requires local_path")
 	}
-	prereq := string(req.PrereqJSON)
-	if prereq == "" {
-		prereq = "[]"
-	}
+	// Prereq groups normalize to the canonical "[[1,2],[3]]" array form.
+	// A client that stringified twice (historical bug) sends a JSON string
+	// literal; unwrap one level so the stored payload is always an array.
+	prereq := normalizePrereqJSON(req.PrereqJSON)
 	it := store.BuildItem{
 		ProjectID:   projectID,
 		Name:        req.Name,
@@ -71,6 +72,37 @@ func decodeBuildItem(r *http.Request, projectID int64) (store.BuildItem, error) 
 		PrereqJSON:  prereq,
 	}
 	return it, nil
+}
+
+// normalizePrereqJSON coerces the request's prereq groups into the canonical
+// array-of-arrays JSON. Accepts the raw array, or one level of JSON-string
+// encoding (a historical client bug stringified twice); anything else
+// stores as "[]" (empty groups).
+func normalizePrereqJSON(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == `""` {
+		return "[]"
+	}
+	var groups [][]int64
+	if err := json.Unmarshal(raw, &groups); err == nil {
+		out, err := json.Marshal(groups)
+		if err == nil {
+			return string(out)
+		}
+		return "[]"
+	}
+	// Not an array: try one unwrap (the raw value is a JSON string).
+	var inner string
+	if err := json.Unmarshal(raw, &inner); err == nil {
+		inner = strings.TrimSpace(inner)
+		if err := json.Unmarshal([]byte(inner), &groups); err == nil {
+			out, err := json.Marshal(groups)
+			if err == nil {
+				return string(out)
+			}
+		}
+	}
+	return "[]"
 }
 
 func (h *coordinator) handleCreateBuildItem(w http.ResponseWriter, r *http.Request) {

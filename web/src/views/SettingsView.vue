@@ -109,6 +109,14 @@ async function doReset() {
 	}
 }
 
+// The modal's X / mask click only fires update:show(false) -- closing on
+// true would wipe the target before the dialog shows.
+function onResetShow(v: boolean) {
+	if (!v) {
+		resetTarget.value = null
+	}
+}
+
 async function changeOwn() {
 	if (!selfNew.value) return
 	try {
@@ -197,7 +205,7 @@ const userColumns = computed<DataTableColumns<UserRecord>>(() => [
 			<NDataTable :columns="userColumns" :data="users" size="small" />
 		</NCard>
 
-		<NModal :show="newUserOpen" preset="dialog" :title="t('build.newUser')" :show-icon="false">
+		<NModal :show="newUserOpen" preset="dialog" :title="t('build.newUser')" :show-icon="false" @update:show="newUserOpen = $event">
 			<NInput v-model:value="newUsername" :placeholder="t('login.username')" style="margin-bottom: 8px" />
 			<NInput v-model:value="newPassword" type="password" :placeholder="t('login.password')" style="margin-bottom: 8px" />
 			<NSelect
@@ -213,7 +221,7 @@ const userColumns = computed<DataTableColumns<UserRecord>>(() => [
 			</template>
 		</NModal>
 
-		<NModal :show="resetTarget !== null" preset="dialog" :title="t('build.resetPassword')" :show-icon="false">
+		<NModal :show="resetTarget !== null" preset="dialog" :title="t('build.resetPassword')" :show-icon="false" @update:show="onResetShow">
 			<NInput v-model:value="resetPassword" type="password" :placeholder="t('login.password')" />
 			<template #action>
 				<NButton @click="resetTarget = null">{{ t('common.cancel') }}</NButton>
@@ -221,7 +229,7 @@ const userColumns = computed<DataTableColumns<UserRecord>>(() => [
 			</template>
 		</NModal>
 
-		<NModal :show="selfPwOpen" preset="dialog" :title="t('build.changeOwnPassword')" :show-icon="false">
+		<NModal :show="selfPwOpen" preset="dialog" :title="t('build.changeOwnPassword')" :show-icon="false" @update:show="selfPwOpen = $event">
 			<NInput v-model:value="selfOld" type="password" :placeholder="t('settings.oldPassword')" style="margin-bottom: 8px" />
 			<NInput v-model:value="selfNew" type="password" :placeholder="t('settings.newPassword')" />
 			<template #action>

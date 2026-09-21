@@ -181,7 +181,7 @@ function go(path: string) {
 			</div>
 		</template>
 
-		<NModal :show="showNew" preset="dialog" :title="t('project.new')" :show-icon="false">
+		<NModal :show="showNew" preset="dialog" :title="t('project.new')" :show-icon="false" @update:show="showNew = $event">
 			<NInput v-model:value="newName" :placeholder="t('project.name')" style="margin-bottom: 8px" />
 			<NInput v-model:value="newNote" :placeholder="t('project.desc')" />
 			<template #action>

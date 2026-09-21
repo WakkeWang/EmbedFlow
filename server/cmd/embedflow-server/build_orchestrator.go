@@ -485,14 +485,22 @@ func toBatchItems(items []store.BuildItem) []batch.Item {
 }
 
 // decodePrereqGroups parses the stored prerequisite-group JSON
-// ([[1,2],[3]] -- group-internal OR, group-to-group AND).
+// ([[1,2],[3]] -- group-internal OR, group-to-group AND). Historical rows
+// may carry a double-encoded value (a JSON string wrapping the array);
+// unwrap one level before giving up.
 func decodePrereqGroups(raw string) [][]batch.ItemID {
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
 	var groups [][]int64
 	if err := json.Unmarshal([]byte(raw), &groups); err != nil {
-		return nil
+		var inner string
+		if json.Unmarshal([]byte(raw), &inner) != nil {
+			return nil
+		}
+		if json.Unmarshal([]byte(inner), &groups) != nil {
+			return nil
+		}
 	}
 	out := make([][]batch.ItemID, 0, len(groups))
 	for _, g := range groups {
