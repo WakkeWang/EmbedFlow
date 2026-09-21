@@ -193,19 +193,19 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 		width: 130,
 		render: (r) => h(NTag, { size: 'small', type: statusType(r.status) }, { default: () => t('build.rec_' + r.status) }),
 	},
-	{ title: t('build.commit'), key: 'commit_sha', width: 150, render: (r) =>
-		h('span', { class: 'mono', style: 'font-size:12px' }, r.commit_sha || '-') },
+	{ title: t('build.commitShort'), key: 'commit_sha', width: 120, render: (r) =>
+		h('span', { class: 'mono', style: 'font-size:12px' }, r.commit_sha ? r.commit_sha.slice(0, 8) : '-') },
 	{ title: t('history.start'), key: 'started_at', render: (r) => fmtTime(r.started_at) },
 	{
 		title: t('history.log'),
 		key: 'log',
 		width: 90,
-		render: (r) => h('a', { href: buildRecordApi.logDownloadURL(r.id), target: '_blank' }, t('history.download')),
+		render: (r) => h('a', { href: buildRecordApi.logDownloadURL(r.id), target: '_blank' }, t('build.viewLog')),
 	},
 	{
 		// Artifacts quick download (0.80 feedback): one click lists the
 		// record's artifacts for direct download, no drawer detour.
-		title: t('build.artifacts'),
+		title: t('build.artifactsShort'),
 		key: 'artifacts',
 		width: 90,
 		render: (r) =>
@@ -268,12 +268,7 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 					</div>
 					<pre v-if="detail.version_info" class="version-pre">{{ detail.version_info }}</pre>
 
-					<h3 class="sec-title">
-						{{ t('history.log') }}
-						<a v-if="detail" class="log-dl" :href="buildRecordApi.logDownloadURL(detail.id)" target="_blank">
-							{{ t('history.download') }}
-						</a>
-					</h3>
+					<h3 class="sec-title">{{ t('history.log') }}</h3>
 					<div v-if="logSegments.length === 0" class="hint">{{ t('history.noLog') }}</div>
 					<div v-for="(seg, si) in logSegments" :key="si" class="log-seg">
 						<NTag size="tiny" :bordered="false">{{ seg.phase }}</NTag>
