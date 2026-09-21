@@ -300,6 +300,27 @@ func (e *Executor) prepareSource(recordID int64, item store.BuildItem, tmpDir st
 			log.line(PhaseClone, "local path is not a git repository: "+item.LocalPath)
 			return "", &Result{Detail: "local source is not a git repository: " + item.LocalPath}
 		}
+		// Latest-source check (requirement 2.1) for local sources: pull the
+		// remote before the dirty gate, so "build the latest" does not trip
+		// on a stale local branch. Repos without a remote skip the pull (a
+		// purely local repository IS its own latest).
+		if item.CheckLatest {
+			if remote := gitDefaultRemote(item.LocalPath); remote == "" {
+				log.line(PhaseClone, "latest check: no remote configured, building the local state as-is")
+			} else {
+				branch := item.GitBranch
+				if branch == "" {
+					branch = gitCurrentBranch(item.LocalPath)
+				}
+				if branch == "" {
+					return "", &Result{Detail: "latest-source check requires a branch (repo is in detached HEAD)"}
+				}
+				if out, err := runGitLogged(log, PhaseClone, item.LocalPath, "pull", "--ff-only", "origin", branch); err != nil {
+					return "", &Result{Detail: "git pull (check latest): " + err.Error() + ": " + out}
+				}
+				log.line(PhaseClone, "pulled latest from origin/"+branch)
+			}
+		}
 		// A pinned commit builds the commit object itself, so the worktree
 		// state is irrelevant -- the dirty gate (requirement 2.2, whose
 		// premise is "output must correspond to a commit") does not apply.
@@ -543,6 +564,30 @@ func CleanupSweep(tmpRoot string, maxAge time.Duration) {
 func isGitRepo(dir string) bool {
 	cmd := exec.Command("git", "-C", dir, "rev-parse", "--git-dir")
 	return cmd.Run() == nil
+}
+
+// gitDefaultRemote returns the source repo's first remote name, or "" when
+// the repository has no remote (the local latest-check skips the pull).
+func gitDefaultRemote(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "remote").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+}
+
+// gitCurrentBranch returns the repo's checked-out branch, or "" in
+// detached HEAD.
+func gitCurrentBranch(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	name := strings.TrimSpace(string(out))
+	if name == "HEAD" {
+		return ""
+	}
+	return name
 }
 
 func gitClean(dir string) (bool, error) {

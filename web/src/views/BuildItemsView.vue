@@ -304,10 +304,10 @@ const sourceOptions = [
 						<div v-if="editor.source_type === 'local'" class="hint">{{ t('build.localCommitHint') }}</div>
 					</div>
 
-					<template v-if="editor.source_type === 'git'">
-						<label>{{ t('build.checkLatest') }}</label>
+					<label>{{ t('build.checkLatest') }}</label>
+					<div>
 						<NCheckbox v-model:checked="editor.check_latest">{{ t('build.checkLatestHint') }}</NCheckbox>
-					</template>
+					</div>
 				</div>
 			</NCard>
 

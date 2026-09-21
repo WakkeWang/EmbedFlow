@@ -108,6 +108,21 @@ function openRecord(r: BuildRecordRecord) {
 	openRecordById(r.id)
 }
 
+// Artifacts quick-download modal (0.80 feedback: 下载列).
+const artifactsOpen = ref(false)
+const artifactsFor = ref<BuildRecordRecord | null>(null)
+const quickArts = ref<ArtifactRecord[]>([])
+
+async function openArtifacts(r: BuildRecordRecord) {
+	artifactsFor.value = r
+	quickArts.value = []
+	try {
+		quickArts.value = await buildRecordApi.artifacts(r.id)
+	} catch {
+		quickArts.value = []
+	}
+}
+
 async function confirmDelete() {
 	if (!deleteTarget.value) return
 	try {
@@ -178,13 +193,32 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 		width: 130,
 		render: (r) => h(NTag, { size: 'small', type: statusType(r.status) }, { default: () => t('build.rec_' + r.status) }),
 	},
-	{ title: t('build.commit'), key: 'commit_sha', width: 120, render: (r) => (r.commit_sha ? r.commit_sha.slice(0, 8) : '-') },
+	{ title: t('build.commit'), key: 'commit_sha', width: 150, render: (r) =>
+		h('span', { class: 'mono', style: 'font-size:12px' }, r.commit_sha || '-') },
 	{ title: t('history.start'), key: 'started_at', render: (r) => fmtTime(r.started_at) },
 	{
 		title: t('history.log'),
 		key: 'log',
-		width: 110,
+		width: 90,
 		render: (r) => h('a', { href: buildRecordApi.logDownloadURL(r.id), target: '_blank' }, t('history.download')),
+	},
+	{
+		// Artifacts quick download (0.80 feedback): one click lists the
+		// record's artifacts for direct download, no drawer detour.
+		title: t('build.artifacts'),
+		key: 'artifacts',
+		width: 90,
+		render: (r) =>
+			h(
+				NButton,
+				{
+					size: 'tiny',
+					quaternary: true,
+					disabled: r.status !== 'succeeded',
+					onClick: () => openArtifacts(r),
+				},
+				{ default: () => t('history.download') },
+			),
 	},
 	{
 		title: '',
@@ -287,6 +321,24 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 				<div class="hint" style="margin-top: 6px">{{ t('build.deleteAllHint') }}</div>
 			</div>
 		</NModal>
+
+		<!-- artifacts quick download (the records table's 下载 column) -->
+		<NModal
+			:show="artifactsOpen"
+			preset="card"
+			:title="`${t('build.artifacts')} - ${t('build.record')} #${artifactsFor?.id ?? ''}`"
+			style="width: 620px"
+			@update:show="artifactsOpen = $event"
+		>
+			<div v-if="quickArts.length > 0" class="quick-arts">
+				<div v-for="a in quickArts" :key="a.id" class="quick-art-row">
+					<span class="mono quick-name">{{ a.name }}</span>
+					<span class="muted">{{ fmtSize(a.size) }}</span>
+					<a :href="buildRecordApi.artifactDownloadURL(a.id)" target="_blank">{{ t('history.download') }}</a>
+				</div>
+			</div>
+			<div v-else class="hint">{{ t('build.noArtifacts') }}</div>
+		</NModal>
 	</div>
 </template>
 
@@ -352,5 +404,26 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 .checksum {
 	font-size: 12px;
 	word-break: break-all;
+}
+.quick-arts {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.quick-art-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 10px;
+	border-radius: 8px;
+	background: rgba(0, 0, 0, 0.03);
+}
+.quick-name {
+	flex: 1;
+	font-size: 13px;
+	word-break: break-all;
+}
+.quick-art-row a {
+	font-weight: 550;
 }
 </style>
