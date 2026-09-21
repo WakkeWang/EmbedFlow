@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/WakkeWang/EmbedFlow/pkg/protocol"
+	"github.com/WakkeWang/EmbedFlow/server/internal/batch"
+	"github.com/WakkeWang/EmbedFlow/server/internal/store"
 )
 
 // Build-module end-to-end tests: REST batch creation + WS BuildEvent
@@ -354,6 +356,74 @@ func TestBuildE2E_BatchValidation(t *testing.T) {
 	resp = apiCall(t, s, adminTok, "POST", "/api/batches", map[string]any{"project_id": 1, "item_ids": []int64{999}})
 	if resp.StatusCode != 400 {
 		t.Fatalf("bad items = %d, want 400", resp.StatusCode)
+	}
+}
+
+// The 0.80 deployment bug: after a restart with an all-terminal history,
+// the kernel's record counter restarted at zero and the next batch's
+// CreateBuildRecord collided with historical ids (primary-key error, the
+// batch row stayed behind as a zombie "running"). sweepStartup must seed
+// from the absolute max ids, not only the nonterminal rows.
+func TestBuildE2E_KernelCountersSurviveRestart(t *testing.T) {
+	s := newTestServer(t)
+	adminTok := s.hub.tokens.issueForTesting("admin")
+
+	// History: one project, one item, one batch left terminal (failed).
+	presp := apiCall(t, s, adminTok, "POST", "/api/projects", map[string]string{"name": "P-restart"})
+	proj := decodeBody[struct {
+		ID int64 `json:"id"`
+	}](t, readRespBody(t, presp))
+	fixture := seedGitFixture(t)
+	iresp := apiCall(t, s, adminTok, "POST", "/api/projects/"+itoa(proj.ID)+"/build-items", map[string]any{
+		"name": "bootfw", "source_type": "local", "local_path": fixture,
+		"command": buildCmdForTest(), "artifacts": []string{"bootfw*.bin"},
+	})
+	item := decodeBody[struct {
+		ID int64 `json:"id"`
+	}](t, readRespBody(t, iresp))
+
+	// Simulate the historical rows: a failed batch + failed record (id 1, 1).
+	// Direct SQL: CreateBatch would mint fresh ids; the seed needs exact ids.
+	if _, err := s.st.CreateBatch(context.Background(), store.Batch{
+		ProjectID: proj.ID, Status: "failed", ItemsJSON: "[" + itoa(item.ID) + "]", CreatedBy: "seed",
+	}); err != nil {
+		t.Fatalf("seed history batch: %v", err)
+	}
+	if _, err := s.st.CreateBuildRecord(context.Background(), store.BuildRecord{
+		BatchID: 1, ItemID: item.ID, ProjectID: proj.ID, Status: "failed",
+	}); err != nil {
+		t.Fatalf("seed history record: %v", err)
+	}
+	// The seeds are the first rows, so both carry id 1; force the batch row
+	// terminal (it was created queued by the store's default).
+	if err := s.st.UpdateBatchStatus(context.Background(), 1, "failed"); err != nil {
+		t.Fatalf("terminal history batch: %v", err)
+	}
+
+	// Restart sweep on a coordinator whose kernel has never seen these ids.
+	hub2 := newCoordinator(s.kernel, s.st, s.hub.dataDir)
+	hub2.builds = newBuildOrchestrator(batch.New(batch.Options{}), s.st, hub2)
+	if err := hub2.builds.sweepStartup(); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	// A new batch must NOT reuse record id 1: its records start above the
+	// historical max.
+	batchID, err := hub2.builds.CreateBatch(context.Background(), proj.ID, []int64{item.ID}, "admin")
+	if err != nil {
+		t.Fatalf("create batch after restart: %v", err)
+	}
+	if batchID <= 1 {
+		t.Fatalf("batch id %d collides with history", batchID)
+	}
+	records, err := s.st.RecordsForBatch(context.Background(), batchID)
+	if err != nil || len(records) == 0 {
+		t.Fatalf("records for new batch: %v", err)
+	}
+	for _, r := range records {
+		if r.ID <= 1 {
+			t.Fatalf("record id %d collides with the historical row", r.ID)
+		}
 	}
 }
 

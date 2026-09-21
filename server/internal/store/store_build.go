@@ -165,6 +165,21 @@ func (s *Store) NonterminalBatches(ctx context.Context) ([]Batch, error) {
 	return out, rows.Err()
 }
 
+// MaxBatchID returns the highest batch id ever persisted (the kernel
+// counter seed: terminal history still occupies the id space).
+func (s *Store) MaxBatchID(ctx context.Context) (int64, error) {
+	var m int64
+	err := s.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) FROM batches").Scan(&m)
+	return m, err
+}
+
+// MaxBuildRecordID returns the highest build-record id ever persisted.
+func (s *Store) MaxBuildRecordID(ctx context.Context) (int64, error) {
+	var m int64
+	err := s.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) FROM build_records").Scan(&m)
+	return m, err
+}
+
 // --- build records ---
 
 // CreateBuildRecord inserts a pending record, returning its id.

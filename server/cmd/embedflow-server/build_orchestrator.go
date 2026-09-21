@@ -75,7 +75,9 @@ func (b *buildOrchestrator) applyMaxParallelSetting() {
 
 // sweepStartup cancels batches left non-terminal by a server restart (M2
 // mirrors CEO-7A: honest terminal states beat zombie "running" rows).
-// Kernel counters seed from persisted max ids so new ids never collide.
+// Kernel counters seed from persisted max ids on EVERY start: the counters
+// start at zero, so without this a clean history (all terminal) makes the
+// next batch reuse record ids that build history still references.
 func (b *buildOrchestrator) sweepStartup() error {
 	ctx := context.Background()
 	var maxBatch, maxRecord int64
@@ -101,8 +103,18 @@ func (b *buildOrchestrator) sweepStartup() error {
 		rec.EndedAt = time.Now().Format(time.RFC3339)
 		_ = b.store.UpdateBuildRecord(ctx, rec)
 	}
+	// Beyond the nonterminal rows, the absolute max ids also bound the
+	// counters (terminal rows are referenced by history views).
+	if m, err := b.store.MaxBatchID(ctx); err == nil && m > maxBatch {
+		maxBatch = m
+	}
+	if m, err := b.store.MaxBuildRecordID(ctx); err == nil && m > maxRecord {
+		maxRecord = m
+	}
 	if maxBatch > 0 || maxRecord > 0 {
 		b.kernel.NextIDs(maxBatch, maxRecord)
+	}
+	if len(batchRows) > 0 || len(recordRows) > 0 {
 		slog.Warn("build startup sweep: canceled in-flight batches", "batches", len(batchRows), "records", len(recordRows))
 	}
 	return nil
