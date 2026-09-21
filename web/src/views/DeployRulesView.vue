@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import {
 	NCard,
 	NButton,
@@ -47,6 +47,11 @@ const deviceOptions = computed(() =>
 )
 
 onMounted(load)
+// Project switch re-pull: rules are project-scoped; drop a stale editor.
+watch(currentId, () => {
+	editor.value = null
+	load()
+})
 
 async function load() {
 	if (!currentId.value) {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, onBeforeUnmount } from 'vue'
+import { ref, onMounted, computed, onBeforeUnmount, watch } from 'vue'
 import {
 	NCard,
 	NButton,
@@ -8,6 +8,7 @@ import {
 	NDataTable,
 	NModal,
 	NSelect,
+	NInput,
 	NCheckbox,
 	type DataTableColumns,
 	useMessage,
@@ -40,6 +41,8 @@ const items = ref<BuildItemRecord[]>([])
 const batches = ref<BatchRecord[]>([])
 const checked = ref<number[]>([])
 const triggering = ref(false)
+// Optional user-facing batch label ("发布前测试"), set at trigger time.
+const batchName = ref('')
 
 // Closure preview: which items will actually build (selected + prereqs).
 function closureOf(selectedIds: number[]): number[] {
@@ -89,6 +92,15 @@ onMounted(async () => {
 	ws.connect()
 })
 
+// Project switch re-pull: close a live detail drawer (its records belong to
+// the old project) and reload the list.
+watch(currentId, () => {
+	if (showDetail.value) closeDetail()
+	checked.value = []
+	checkedBatches.value = []
+	load()
+})
+
 onBeforeUnmount(() => {
 	if (detailBatch.value) {
 		ws?.sendControl(Frame.BuildCtrl, { command: 'unsubscribe', batch_id: detailBatch.value.id })
@@ -126,8 +138,9 @@ async function trigger() {
 	if (!currentId.value || checked.value.length === 0) return
 	triggering.value = true
 	try {
-		const res = await batchApi.create(currentId.value, checked.value)
+		const res = await batchApi.create(currentId.value, checked.value, batchName.value.trim())
 		checked.value = []
+		batchName.value = ''
 		message.success(t('build.batchCreated'))
 		await load()
 		await openDetail(res.id)
@@ -248,7 +261,7 @@ function batchAge(b: BatchRecord): string {
 }
 
 const detailColumns = computed<DataTableColumns<BuildRecordRecord>>(() => [
-	{ title: '#', key: 'id', width: 60 },
+	{ title: '#', key: 'id', width: 72, render: (r) => fmtNo(r.id) },
 	{ title: t('build.item'), key: 'item', render: (r) => itemNameOf(r) },
 	{
 		title: t('history.state'),
@@ -262,6 +275,11 @@ const detailColumns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 const itemOptions = computed(() =>
 	items.value.map((it) => ({ label: it.name, value: it.id as number })),
 )
+
+// Zero-padded id display (records and batches align at 4 digits).
+function fmtNo(n: number): string {
+	return '#' + String(n).padStart(4, '0')
+}
 
 // Batch selection (0.80 feedback: delete some or all batch history).
 const checkedBatches = ref<number[]>([])
@@ -319,6 +337,13 @@ async function confirmDeleteBatches() {
 					:placeholder="t('build.pickItems')"
 					style="margin-bottom: 10px"
 				/>
+				<NInput
+					v-model:value="batchName"
+					:placeholder="t('build.batchNamePh')"
+					maxlength="80"
+					clearable
+					style="margin-bottom: 10px"
+				/>
 				<div class="trigger-row">
 					<span class="hint">
 						{{
@@ -362,7 +387,8 @@ async function confirmDeleteBatches() {
 							@click.stop
 							@update:checked="(v: boolean) => toggleBatch(b.id, v)"
 						/>
-						<span class="batch-id mono">#{{ b.id }}</span>
+						<span class="batch-id mono">{{ fmtNo(b.id) }}</span>
+						<span v-if="b.name" class="batch-name">{{ b.name }}</span>
 						<NTag size="small" :type="statusType(b.status)">{{ t('build.batch_' + b.status) }}</NTag>
 						<span class="hint">{{ b.created_by }}</span>
 						<span v-if="b.status === 'queued' || b.status === 'running'" class="hint mono">{{ batchAge(b) }}</span>
@@ -385,7 +411,7 @@ async function confirmDeleteBatches() {
 		<NModal
 			:show="showDetail"
 			preset="card"
-			:title="`${t('build.batch')} #${detailBatch?.id}`"
+			:title="detailBatch?.name ? `${t('build.batch')} ${fmtNo(detailBatch.id)} · ${detailBatch.name}` : `${t('build.batch')} ${fmtNo(detailBatch?.id ?? 0)}`"
 			style="width: 760px"
 			@update:show="showDetail = $event"
 			@after-leave="closeDetail"
@@ -395,7 +421,7 @@ async function confirmDeleteBatches() {
 			     The full log stays one download away in the record drawer. -->
 			<template v-for="r in detailRecords" :key="r.id">
 				<div v-if="(liveLogs[r.id]?.length ?? 0) > 0" class="live-log">
-					<span class="live-log-title mono">#{{ r.id }} {{ itemNameOf(r) }}</span>
+					<span class="live-log-title mono">{{ fmtNo(r.id) }} {{ itemNameOf(r) }}</span>
 					<pre class="live-log-pre">{{ liveLogs[r.id].join('\n') }}</pre>
 				</div>
 			</template>
@@ -474,6 +500,10 @@ async function confirmDeleteBatches() {
 }
 .batch-id {
 	font-weight: 600;
+}
+.batch-name {
+	font-weight: 600;
+	font-size: 14px;
 }
 .flex1 {
 	flex: 1;

@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import {
 	NButton,
 	NSelect,
@@ -66,6 +66,9 @@ onMounted(() => {
 	load()
 	connect()
 })
+
+// Project switch re-pull: deployments/rules/records are all project-scoped.
+watch(currentId, load)
 
 onUnmounted(() => {
 	if (ws) {

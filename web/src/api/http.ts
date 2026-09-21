@@ -167,6 +167,7 @@ export interface BatchRecord {
 	id: number
 	project_id: number
 	status: 'queued' | 'running' | 'completed' | 'failed' | 'canceled'
+	name?: string
 	items_json: string
 	created_by: string
 	created_at: string
@@ -214,8 +215,8 @@ export const buildItemApi = {
 }
 
 export const batchApi = {
-	create: (projectId: number, itemIds: number[]) =>
-		api<{ id: number }>('/api/batches', { method: 'POST', body: { project_id: projectId, item_ids: itemIds } }),
+	create: (projectId: number, itemIds: number[], name = '') =>
+		api<{ id: number }>('/api/batches', { method: 'POST', body: { project_id: projectId, item_ids: itemIds, name } }),
 	list: (projectId: number) => api<BatchRecord[]>(`/api/batches?project_id=${projectId}`),
 	get: (id: number) => api<{ batch: BatchRecord; records: BuildRecordRecord[] }>(`/api/batches/${id}`),
 	cancel: (id: number) => api(`/api/batches/${id}/cancel`, { method: 'POST' }),
@@ -232,8 +233,10 @@ export const buildRecordApi = {
 	logDownloadURL: (id: number) => `/api/build-records/${id}/log/download?token=${encodeURIComponent(getToken())}`,
 	remove: (id: number, mode: 'record' | 'artifacts') =>
 		api(`/api/build-records/${id}?mode=${mode}`, { method: 'DELETE' }),
+	removeMany: (ids: number[], mode: 'record' | 'artifacts') =>
+		api('/api/build-records/delete-all', { method: 'POST', body: { ids, mode } }),
 	removeAll: (projectId: number, mode: 'record' | 'artifacts') =>
-		api('/api/build-records/delete-all', { method: 'POST', body: { project_id: projectId, mode } }),
+		api('/api/build-records/delete-all', { method: 'POST', body: { project_id: projectId, all: true, mode } }),
 	artifactDownloadURL: (id: number) => `/api/artifacts/${id}/download?token=${encodeURIComponent(getToken())}`,
 }
 

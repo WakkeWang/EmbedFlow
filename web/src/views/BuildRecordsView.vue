@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import {
 	NButton,
 	NTag,
 	NEmpty,
 	NDataTable,
-	NSpace,
 	NModal,
 	NCheckbox,
 	NDrawer,
@@ -50,6 +49,45 @@ const withArtifacts = computed({
 // Delete-all (requirement 2.4: 删除/全部删除) with the same mode choice.
 const showDeleteAll = ref(false)
 
+// Row selection (0.80 feedback: select-all + delete selected, mirroring the
+// batches page). Only terminal records are checkable: live ones are not
+// deletable (the server skips them either way).
+const checkedRecords = ref<number[]>([])
+const deletableRecords = computed(() => records.value.filter((r) => r.status !== 'pending' && r.status !== 'building'))
+const allRecordsChecked = computed(
+	() => deletableRecords.value.length > 0 && deletableRecords.value.every((r) => checkedRecords.value.includes(r.id)),
+)
+
+function toggleRecord(id: number, v: boolean) {
+	if (v) {
+		if (!checkedRecords.value.includes(id)) checkedRecords.value = [...checkedRecords.value, id]
+	} else {
+		checkedRecords.value = checkedRecords.value.filter((x) => x !== id)
+	}
+}
+
+function toggleAllRecords(v: boolean) {
+	checkedRecords.value = v ? deletableRecords.value.map((r) => r.id) : []
+}
+
+// Selected-records delete reuses the delete-all endpoint's ids form, with
+// the same record-vs-artifacts mode choice.
+const deleteTargetRecords = ref<number[] | null>(null)
+
+async function confirmDeleteRecords() {
+	if (!deleteTargetRecords.value) return
+	try {
+		await buildRecordApi.removeMany(deleteTargetRecords.value, deleteMode.value)
+		message.success(t('common.confirm'))
+		checkedRecords.value = []
+		await load()
+	} catch (e) {
+		message.error(String(e))
+	} finally {
+		deleteTargetRecords.value = null
+	}
+}
+
 async function confirmDeleteAll() {
 	if (!currentId.value) return
 	try {
@@ -67,6 +105,14 @@ onMounted(async () => {
 	// Deep link: ?open=<id> (from the batch drawer's detail button).
 	const open = Number(route.query.open)
 	if (open) await openRecordById(open)
+})
+
+// Project switch re-pull: records are project-scoped; close a live detail
+// drawer and clear a stale selection.
+watch(currentId, () => {
+	if (showDetail.value) showDetail.value = false
+	checkedRecords.value = []
+	load()
 })
 
 async function load() {
@@ -124,22 +170,6 @@ async function openArtifacts(r: BuildRecordRecord) {
 	}
 }
 
-// Log viewer modal (0.80 feedback: view in the web, download from there).
-const logOpen = ref(false)
-const logFor = ref<BuildRecordRecord | null>(null)
-const logViewText = ref('')
-
-async function openLogView(r: BuildRecordRecord) {
-	logFor.value = r
-	logViewText.value = t('history.noLog')
-	logOpen.value = true
-	try {
-		logViewText.value = (await buildRecordApi.logTail(r.id)).tail
-	} catch {
-		logViewText.value = ''
-	}
-}
-
 async function confirmDelete() {
 	if (!deleteTarget.value) return
 	try {
@@ -170,7 +200,6 @@ function segmentLog(text: string): { phase: string; lines: string[] }[] {
 }
 
 const logSegments = computed(() => segmentLog(logText.value))
-const logViewSegments = computed(() => segmentLog(logViewText.value))
 
 function itemName(id: number): string {
 	return itemNames.value[id] ?? `#${id}`
@@ -199,13 +228,49 @@ const artifactColumns = computed<DataTableColumns<ArtifactRecord>>(() => [
 		key: 'dl',
 		width: 110,
 		render: (a) =>
-			h('a', { href: buildRecordApi.artifactDownloadURL(a.id), target: '_blank' }, t('history.download')),
+			h('a', { href: buildRecordApi.artifactDownloadURL(a.id), target: '_blank' }, t('build.downloadArtifacts')),
 	},
 ])
 
+// Zero-padded id display: #0001 (4 digits, grows past 9999 gracefully).
+function fmtNo(n: number): string {
+	return '#' + String(n).padStart(4, '0')
+}
+
 const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
-	{ title: t('build.recordNo'), key: 'id', width: 64 },
-	{ title: t('build.batch'), key: 'batch_id', width: 64, render: (r) => `#${r.batch_id}` },
+	{
+		// Selection: header checkbox = select all DELETABLE records (live
+		// ones are never checkable), row checkboxes for the rest.
+		title: () =>
+			h(NCheckbox, {
+				checked: allRecordsChecked.value,
+				indeterminate: checkedRecords.value.length > 0 && !allRecordsChecked.value,
+				disabled: deletableRecords.value.length === 0,
+				onUpdateChecked: toggleAllRecords,
+			}),
+		key: 'check',
+		width: 44,
+		render: (r) =>
+			h(NCheckbox, {
+				checked: checkedRecords.value.includes(r.id),
+				disabled: r.status === 'pending' || r.status === 'building',
+				onUpdateChecked: (v: boolean) => toggleRecord(r.id, v),
+			}),
+	},
+	{
+		// The record id IS the entry point: click it to open the detail
+		// drawer (log + artifacts + download), no separate actions column.
+		title: t('build.recordNo'),
+		key: 'id',
+		width: 84,
+		render: (r) =>
+			h('a', {
+				class: 'mono rec-link',
+				href: 'javascript:;',
+				onClick: () => openRecord(r),
+			}, fmtNo(r.id)),
+	},
+	{ title: t('build.batch'), key: 'batch_id', width: 84, render: (r) => fmtNo(r.batch_id) },
 	{ title: t('build.item'), key: 'item', width: 150, ellipsis: { tooltip: true }, render: (r) => itemName(r.item_id) },
 	{
 		title: t('history.state'),
@@ -217,13 +282,7 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 		h('span', { class: 'mono', style: 'font-size:12px' }, r.branch || '-') },
 	{ title: t('build.commitShort'), key: 'commit_sha', width: 86, render: (r) =>
 		h('span', { class: 'mono', style: 'font-size:12px' }, r.commit_sha ? r.commit_sha.slice(0, 8) : '-') },
-	{ title: t('history.start'), key: 'started_at', width: 132, render: (r) => fmtTime(r.started_at) },
-	{
-		title: t('history.log'),
-		key: 'log',
-		width: 90,
-		render: (r) => h(NButton, { size: 'tiny', quaternary: true, onClick: () => openLogView(r) }, { default: () => t('build.logView') }),
-	},
+	{ title: t('history.start'), key: 'started_at', width: 140, render: (r) => fmtTime(r.started_at) },
 	{
 		// Artifacts quick download (0.80 feedback): one click lists the
 		// record's artifacts for direct download, no drawer detour.
@@ -242,28 +301,6 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 				{ default: () => t('build.downloadArtifacts') },
 			),
 	},
-	{
-		title: '',
-		key: 'actions',
-		width: 108,
-		render: (r) =>
-			h(NSpace, { size: 0, wrap: false, style: 'margin-left: -6px' }, {
-				default: () => [
-					h(NButton, { size: 'tiny', quaternary: true, onClick: () => openRecord(r) }, { default: () => t('build.detail') }),
-					h(
-						NButton,
-						{
-							size: 'tiny',
-							quaternary: true,
-							type: 'error',
-							disabled: r.status === 'pending' || r.status === 'building',
-							onClick: () => (deleteTarget.value = r),
-						},
-						{ default: () => t('expect.delete') },
-					),
-				],
-			}),
-	},
 ])
 </script>
 
@@ -278,22 +315,56 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 
 		<NEmpty v-if="records.length === 0" :description="t('build.recordsEmpty')" />
 
-		<NDataTable
-			v-else
-			:columns="columns"
-			:data="records"
-			size="small"
-			class="records-table"
-			:scroll-x="984"
-		/>
+		<template v-else>
+			<div class="records-toolbar">
+				<NCheckbox
+					:checked="allRecordsChecked"
+					:indeterminate="checkedRecords.length > 0 && !allRecordsChecked"
+					@update:checked="toggleAllRecords"
+				>
+					{{ t('build.selectAll') }}
+				</NCheckbox>
+				<NButton
+					size="small"
+					type="error"
+					quaternary
+					:disabled="checkedRecords.length === 0"
+					@click="deleteTargetRecords = [...checkedRecords]"
+				>
+					{{ t('build.deleteSelected', { n: checkedRecords.length }) }}
+				</NButton>
+			</div>
+			<NDataTable
+				:columns="columns"
+				:data="records"
+				size="small"
+				class="records-table"
+				:scroll-x="1028"
+			/>
+		</template>
 
 		<NDrawer v-model:show="showDetail" :width="760">
-			<NDrawerContent :title="`${t('build.record')} #${detail?.id}`" closable>
+			<NDrawerContent :title="`${t('build.record')} ${fmtNo(detail?.id ?? 0)}`" closable>
 				<template v-if="detail">
 					<div class="meta">
 						<NTag size="small" :type="statusType(detail.status)">{{ t('build.rec_' + detail.status) }}</NTag>
 						<span v-if="detail.commit_sha" class="mono meta-item">commit {{ detail.commit_sha.slice(0, 12) }}</span>
 						<span class="meta-item">{{ detail.executor }}</span>
+						<span class="flex1"></span>
+						<a
+							class="log-dl"
+							:href="buildRecordApi.logDownloadURL(detail.id)"
+							target="_blank"
+						>{{ t('history.downloadLog') }}</a>
+						<NButton
+							size="tiny"
+							type="error"
+							quaternary
+							:disabled="detail.status === 'pending' || detail.status === 'building'"
+							@click="deleteTarget = detail"
+						>
+							{{ t('expect.delete') }}
+						</NButton>
 					</div>
 					<pre v-if="detail.version_info" class="version-pre">{{ detail.version_info }}</pre>
 
@@ -346,11 +417,28 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 			</div>
 		</NModal>
 
+		<!-- selected-records delete: same record-vs-artifacts choice -->
+		<NModal
+			:show="deleteTargetRecords !== null"
+			preset="dialog"
+			type="warning"
+			:title="t('build.deleteSelectedTitle')"
+			:positive-text="t('common.confirm')"
+			:negative-text="t('common.cancel')"
+			@positive-click="confirmDeleteRecords"
+			@negative-click="deleteTargetRecords = null"
+		>
+			<div>
+				<NCheckbox v-model:checked="withArtifacts" size="small">{{ t('build.deleteArtifacts') }}</NCheckbox>
+				<div class="hint" style="margin-top: 6px">{{ t('build.deleteSelectedHint', { n: deleteTargetRecords?.length ?? 0 }) }}</div>
+			</div>
+		</NModal>
+
 		<!-- artifacts quick download (the records table's 下载 column) -->
 		<NModal
 			:show="artifactsOpen"
 			preset="card"
-			:title="`${t('build.artifacts')} - ${t('build.record')} #${artifactsFor?.id ?? ''}`"
+			:title="`${t('build.artifacts')} - ${t('build.record')} ${fmtNo(artifactsFor?.id ?? 0)}`"
 			style="width: 620px"
 			@update:show="artifactsOpen = $event"
 		>
@@ -364,25 +452,6 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 			<div v-else class="hint">{{ t('build.noArtifacts') }}</div>
 		</NModal>
 
-		<!-- log viewer (the records table's 查看 column) -->
-		<NModal
-			:show="logOpen"
-			preset="card"
-			:title="`${t('history.log')} - ${t('build.record')} #${logFor?.id ?? ''}`"
-			style="width: 760px"
-			@update:show="logOpen = $event"
-		>
-			<template #header-extra>
-				<a class="log-dl" :href="logFor ? buildRecordApi.logDownloadURL(logFor.id) : ''" target="_blank">
-					{{ t('history.download') }}
-				</a>
-			</template>
-			<div v-if="logViewSegments.length === 0" class="hint">{{ t('history.noLog') }}</div>
-			<div v-for="(seg, si) in logViewSegments" :key="si" class="log-seg">
-				<NTag size="tiny" :bordered="false">{{ seg.phase }}</NTag>
-				<pre class="log-pre">{{ seg.lines.join('\n') }}</pre>
-			</div>
-		</NModal>
 	</div>
 </template>
 
@@ -393,10 +462,16 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 	margin-bottom: 12px;
 }
 .records-table {
-	/* The column set (record/batch/item/status/branch/commit/start/log/
-	   artifacts/actions) sums past 1200px: no cap, the outer scroll owns
+	/* The column set (check/record/batch/item/status/branch/commit/start/
+	   artifacts) sums past 1200px: no cap, the outer scroll owns
 	   narrow viewports. */
 	max-width: none;
+}
+.records-toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 8px;
 }
 .meta {
 	display: flex;
@@ -407,6 +482,9 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 .meta-item {
 	font-size: 13px;
 	color: rgba(0, 0, 0, 0.55);
+}
+.flex1 {
+	flex: 1;
 }
 .mono {
 	font-family: 'JetBrains Mono', Consolas, monospace;

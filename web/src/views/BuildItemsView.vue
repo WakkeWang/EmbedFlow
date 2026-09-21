@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import {
 	NCard,
 	NButton,
@@ -50,6 +50,9 @@ const prereqPickerOpen = ref(false)
 const prereqGroupIndex = ref(0)
 
 onMounted(load)
+// Re-pull when the project switcher changes the selection: the cards are
+// project-scoped, so a stale list would show the previous project's data.
+watch(currentId, load)
 
 async function load() {
 	if (!currentId.value) {
@@ -267,7 +270,7 @@ const sourceOptions = [
 
 		<NEmpty v-if="!loading && items.length === 0 && !editor" :description="t('build.itemsEmpty')" />
 
-		<div v-if="items.length > 0 && !editor" class="rule-list">
+		<div v-if="items.length > 0 && !editor" class="rule-grid">
 			<NCard v-for="it in items" :key="it.id" size="small" :title="it.name">
 				<template #header-extra>
 					<NTag size="small">{{ it.source_type }}</NTag>
@@ -422,11 +425,11 @@ const sourceOptions = [
 	font-size: 20px;
 	font-weight: 650;
 }
-.rule-list {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	max-width: 720px;
+.rule-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+	max-width: 1080px;
 }
 .item-cmd {
 	font-size: 13px;
