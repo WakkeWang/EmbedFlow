@@ -116,6 +116,7 @@ const quickArts = ref<ArtifactRecord[]>([])
 async function openArtifacts(r: BuildRecordRecord) {
 	artifactsFor.value = r
 	quickArts.value = []
+	artifactsOpen.value = true
 	try {
 		quickArts.value = await buildRecordApi.artifacts(r.id)
 	} catch {
@@ -200,7 +201,7 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 		title: t('history.log'),
 		key: 'log',
 		width: 90,
-		render: (r) => h('a', { href: buildRecordApi.logDownloadURL(r.id), target: '_blank' }, t('build.viewLog')),
+		render: (r) => h('a', { href: buildRecordApi.logDownloadURL(r.id), target: '_blank' }, t('build.logView')),
 	},
 	{
 		// Artifacts quick download (0.80 feedback): one click lists the
@@ -217,7 +218,7 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 					disabled: r.status !== 'succeeded',
 					onClick: () => openArtifacts(r),
 				},
-				{ default: () => t('history.download') },
+				{ default: () => t('build.downloadArtifacts') },
 			),
 	},
 	{
@@ -329,7 +330,7 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 				<div v-for="a in quickArts" :key="a.id" class="quick-art-row">
 					<span class="mono quick-name">{{ a.name }}</span>
 					<span class="muted">{{ fmtSize(a.size) }}</span>
-					<a :href="buildRecordApi.artifactDownloadURL(a.id)" target="_blank">{{ t('history.download') }}</a>
+					<a :href="buildRecordApi.artifactDownloadURL(a.id)" target="_blank">{{ t('build.downloadArtifacts') }}</a>
 				</div>
 			</div>
 			<div v-else class="hint">{{ t('build.noArtifacts') }}</div>

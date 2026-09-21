@@ -190,6 +190,8 @@ export const en = {
 		commitShort: 'commit',
 		viewLog: 'view log',
 		artifactsShort: 'artifacts',
+		downloadArtifacts: 'download',
+		logView: 'view',
 		checkLatest: 'Pull latest',
 		checkLatestHint: 'Verify branch/commit and pull the remote latest before building',
 		localCommitHint: 'When set, builds this exact commit; the worktree dirty gate is skipped (the build uses the commit object)',

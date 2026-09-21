@@ -190,6 +190,8 @@ export const zh = {
 		commitShort: 'commit',
 		viewLog: '查看日志',
 		artifactsShort: '产物',
+		downloadArtifacts: '下载',
+		logView: '查看',
 		checkLatest: '拉取远端最新',
 		checkLatestHint: '构建前核对分支/commit 并拉取远端最新',
 		localCommitHint: '填写后按该 commit 构建，工作区 dirty 检查跳过（构建内容取自 commit 对象）',
