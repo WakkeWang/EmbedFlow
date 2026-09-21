@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -86,14 +87,6 @@ CREATE TABLE IF NOT EXISTS devices (
 	project    TEXT NOT NULL,
 	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
-
--- M3 (requirement 3.2): SSH credentials, encrypted at rest (requirement
--- 6.2, secretbox AES-256-GCM). ALTER-based so existing databases upgrade.
-ALTER TABLE devices ADD COLUMN ssh_host TEXT NOT NULL DEFAULT '';
-ALTER TABLE devices ADD COLUMN ssh_port INTEGER NOT NULL DEFAULT 22;
-ALTER TABLE devices ADD COLUMN ssh_user TEXT NOT NULL DEFAULT '';
-ALTER TABLE devices ADD COLUMN ssh_pass_enc TEXT NOT NULL DEFAULT '';
-ALTER TABLE devices ADD COLUMN note TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS projects (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -224,9 +217,26 @@ CREATE TABLE IF NOT EXISTS exec_records (
 	ended_at   TEXT NOT NULL DEFAULT ''
 );
 `
+
 	_, err := s.db.Exec(ddl)
 	if err != nil {
 		return fmt.Errorf("store: migrate: %w", err)
+	}
+	// M3 (requirement 3.2): SSH credentials, encrypted at rest (requirement
+	// 6.2, secretbox AES-256-GCM). ALTER-based so existing databases upgrade;
+	// a column that already exists IS the target state, so "duplicate column
+	// name" is skipped (every reopen of an M3+ database lands here).
+	deviceAlters := []string{
+		"ALTER TABLE devices ADD COLUMN ssh_host TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE devices ADD COLUMN ssh_port INTEGER NOT NULL DEFAULT 22",
+		"ALTER TABLE devices ADD COLUMN ssh_user TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE devices ADD COLUMN ssh_pass_enc TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE devices ADD COLUMN note TEXT NOT NULL DEFAULT ''",
+	}
+	for _, stmt := range deviceAlters {
+		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("store: migrate device column: %w", err)
+		}
 	}
 	// Data migrations: legacy tables into config_objects. The legacy
 	// build_items / expect_rules tables stay as untouched backups after the
