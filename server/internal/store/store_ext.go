@@ -61,6 +61,20 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	return out, rows.Err()
 }
 
+// GetProject fetches one project.
+func (s *Store) GetProject(ctx context.Context, id int64) (Project, error) {
+	var p Project
+	var created string
+	err := s.db.QueryRowContext(ctx,
+		"SELECT id, name, note, created_at FROM projects WHERE id = ?", id).
+		Scan(&p.ID, &p.Name, &p.Note, &created)
+	if err != nil {
+		return Project{}, fmt.Errorf("store: get project %d: %w", id, err)
+	}
+	p.CreatedAt = parseTime(created)
+	return p, nil
+}
+
 // DeleteProject removes a project record (sections M2+ cascade by design
 // when they hang entities off project_id).
 func (s *Store) DeleteProject(ctx context.Context, id int64) error {

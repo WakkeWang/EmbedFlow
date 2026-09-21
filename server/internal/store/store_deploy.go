@@ -41,6 +41,32 @@ type DeployPayload struct {
 	FlashDeviceID int64           `json:"flash_device_id,omitempty"`
 	FlashStepsJSON string         `json:"flash_steps_json,omitempty"`
 	FlashTimeoutSec int            `json:"flash_timeout_sec,omitempty"`
+	// USB stick packaging (requirement 3.1.3 second half): when set, the
+	// deploy detail view offers the generated stick zip for download.
+	USBDisk *USBDisk `json:"usb_disk,omitempty"`
+}
+
+// USBDisk configures the stick zip a rule generates: the root folder name
+// (a Render template), which artifact goes to which directory inside it,
+// and the checksum file's custom fields (field name -> artifact glob; the
+// file name and its md5 are generated fresh at package time).
+type USBDisk struct {
+	RootName  string             `json:"root_name"`
+	Layout    []USBLayout        `json:"layout,omitempty"`
+	Checksums []USBChecksumField `json:"checksums,omitempty"`
+}
+
+// USBLayout maps one artifact glob to a directory inside the zip root.
+type USBLayout struct {
+	Glob string `json:"glob"`
+	Dir  string `json:"dir,omitempty"`
+}
+
+// USBChecksumField binds one custom field to an artifact glob
+// (rootfsfile <- *.tar.gz).
+type USBChecksumField struct {
+	Name string `json:"name"`
+	Glob string `json:"glob"`
 }
 
 // DeployParamDef declares one operator-supplied parameter (name + default)
@@ -229,6 +255,15 @@ func (s *Store) UpdateDeployRecord(ctx context.Context, r DeployRecord) error {
 		_, err := s.db.ExecContext(ctx,
 			"UPDATE deploy_records SET status = ?, detail = ?, exec_record_id = ?, session_id = ?, ended_at = ? WHERE id = ?",
 			r.Status, r.Detail, r.ExecRecordID, r.SessionID, r.EndedAt, r.ID)
+		return err
+	})
+}
+
+// DeleteDeployRecord removes one record (the deploy history's delete
+// button). Callers gate on status: a running record is not deletable.
+func (s *Store) DeleteDeployRecord(ctx context.Context, id int64) error {
+	return s.enqueue(ctx, func() error {
+		_, err := s.db.ExecContext(ctx, "DELETE FROM deploy_records WHERE id = ?", id)
 		return err
 	})
 }

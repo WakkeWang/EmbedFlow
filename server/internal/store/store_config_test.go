@@ -183,3 +183,37 @@ func TestConfigObjects_CRUDRoundTrip(t *testing.T) {
 		t.Fatal("deleted object still readable")
 	}
 }
+
+func TestConfigObjects_CopyAcrossProjects(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	src, _ := s.CreateProject(ctx, "P-src", "")
+	dst, _ := s.CreateProject(ctx, "P-dst", "")
+
+	id, err := s.CreateConfigObject(ctx, ConfigObject{
+		ProjectID: src, Kind: KindDeployRule, Name: "flash-via-usb", PayloadJSON: `{"mode":"manual","steps_md":"go"}`,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	newID, err := s.CopyConfigObject(ctx, id, dst)
+	if err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	if newID == id {
+		t.Fatal("copy reused the source id")
+	}
+	got, err := s.GetConfigObject(ctx, newID)
+	if err != nil {
+		t.Fatalf("get copy: %v", err)
+	}
+	if got.ProjectID != dst || got.Kind != KindDeployRule || got.Name != "flash-via-usb" ||
+		got.PayloadJSON != `{"mode":"manual","steps_md":"go"}` {
+		t.Fatalf("copy mismatch: %+v", got)
+	}
+	// The original is untouched.
+	orig, _ := s.GetConfigObject(ctx, id)
+	if orig.ProjectID != src {
+		t.Fatalf("source moved: %+v", orig)
+	}
+}

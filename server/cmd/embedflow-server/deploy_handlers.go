@@ -2,9 +2,17 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"time"
 
+	"github.com/WakkeWang/EmbedFlow/server/internal/deployer"
 	"github.com/WakkeWang/EmbedFlow/server/internal/sessionlog"
 	"github.com/WakkeWang/EmbedFlow/server/internal/store"
 )
@@ -24,11 +32,12 @@ type deployRuleBody struct {
 	FlashDeviceID   int64                  `json:"flash_device_id"`
 	FlashSteps      json.RawMessage        `json:"flash_steps"`
 	FlashTimeoutSec int                    `json:"flash_timeout_sec"`
+	USBDisk         *store.USBDisk         `json:"usb_disk"`
 }
 
 // toPayload maps the request body into the persistence payload.
 func (b deployRuleBody) toPayload() store.DeployPayload {
-	p := store.DeployPayload{Mode: b.Mode}
+	p := store.DeployPayload{Mode: b.Mode, USBDisk: b.USBDisk}
 	switch b.Mode {
 	case "manual":
 		p.StepsMD = b.StepsMD
@@ -226,9 +235,34 @@ func (h *coordinator) handleCancelDeployment(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleDeployLogTail serves the tail of a deploy record's log.
-func (h *coordinator) handleDeployLogTail(w http.ResponseWriter, r *http.Request) {
+// handleDeleteDeployRecord removes a terminal deploy record and its log
+// dir. A running record is not deletable -- cancel it first (the build
+// records' delete semantics, applied to deploys).
+func (h *coordinator) handleDeleteDeployRecord(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	rec, err := h.store.GetDeployRecord(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "no such deploy record")
+		return
+	}
+	if rec.Status == store.DeployRunning {
+		writeErr(w, http.StatusConflict, "deploy is running: cancel it first")
+		return
+	}
+	if err := h.store.DeleteDeployRecord(r.Context(), id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_ = os.RemoveAll(filepath.Dir(deployLogPath(h.dataDir, id)))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDeployLogTail serves the tail of a deploy record's log.
+func (h *coordinator) handleDeployLogTail(w http.ResponseWriter, r *http.Request) {	id, err := pathID(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "bad id")
 		return
@@ -334,4 +368,76 @@ func (h *coordinator) handleSSHTest(w http.ResponseWriter, r *http.Request) {
 	password := h.decryptPassword(device.SshPassEnc)
 	ok, detail := h.deploys.testSSH(device.SSHHost, device.SSHPort, device.SSHUser, password)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": ok, "detail": detail})
+}
+
+// handleDeployUSBZip streams the rule's USB stick zip for one build record
+// (requirement 3.1.3 second half: 目录名对齐实际路径 + 操作指引, generated
+// on request, nothing cached on disk). Every configured glob must match
+// exactly one artifact or the whole zip fails with a 422 listing them.
+func (h *coordinator) handleDeployUSBZip(w http.ResponseWriter, r *http.Request) {
+	ruleID, err := pathID(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad rule id")
+		return
+	}
+	buildRecordID, err := strconv.ParseInt(r.URL.Query().Get("build_record_id"), 10, 64)
+	if err != nil || buildRecordID <= 0 {
+		writeErr(w, http.StatusBadRequest, "build_record_id required")
+		return
+	}
+	rule, payload, err := h.store.GetDeployRule(r.Context(), ruleID)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "no such rule")
+		return
+	}
+	if payload.USBDisk == nil {
+		writeErr(w, http.StatusBadRequest, "rule has no USB stick configuration")
+		return
+	}
+	// The record must exist (its artifacts are the zip's content); the
+	// lookup doubles as the existence check -- no row, no zip.
+	if _, err := h.store.GetBuildRecord(r.Context(), buildRecordID); err != nil {
+		writeErr(w, http.StatusNotFound, "no such build record")
+		return
+	}
+	arts, err := h.store.ArtifactsForRecord(r.Context(), buildRecordID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	views := make([]deployer.ArtifactView, 0, len(arts))
+	for _, a := range arts {
+		views = append(views, deployer.ArtifactView{ID: a.ID, Name: a.Name, Size: a.Size, Checksum: a.Checksum})
+	}
+
+	// The root folder name is a template so it tracks the build's version.
+	rootName, _ := deployer.Render(payload.USBDisk.RootName, deployer.Variables{
+		Artifact: deployer.ArtifactVariables(views),
+		Device:   map[string]string{},
+		Params:   map[string]string{},
+	})
+
+	// Resolve before touching the response: a bad glob or a missing
+	// artifact fails as a clean 422, never as a half-downloaded zip.
+	if err := deployer.ResolveUSB(*payload.USBDisk, views); err != nil {
+		var ze *deployer.USBZipError
+		missing := []string{}
+		if errors.As(err, &ze) {
+			missing = ze.Missing
+		}
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": err.Error(), "missing": missing})
+		return
+	}
+
+	open := func(a deployer.ArtifactView) (io.ReadCloser, error) {
+		return os.Open(artifactFilePath(h.dataDir, buildRecordID, a.Name))
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf("attachment; filename=%q", "usb-deploy-rule"+strconv.FormatInt(rule.ID, 10)+"-build"+strconv.FormatInt(buildRecordID, 10)+".zip"))
+	if err := deployer.BuildUSBZip(w, rootName, *payload.USBDisk, views, open, time.Now()); err != nil {
+		// Past this point headers are out; log it -- the client sees a
+		// truncated zip and the server log tells why.
+		slog.Error("usb zip stream failed", "rule", rule.ID, "build", buildRecordID, "err", err)
+	}
 }

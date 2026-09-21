@@ -162,6 +162,24 @@ func (s *Store) DeleteConfigObject(ctx context.Context, id int64) error {
 	})
 }
 
+// CopyConfigObject duplicates one object into another project (requirement
+// 1.6 跨工程复制粘贴): same kind, name and payload, fresh id. The cross-
+// project reference inside build items' prereq JSON is copied verbatim --
+// references are logical ids and stay valid across projects (batch planning
+// reads them cross-project anyway).
+func (s *Store) CopyConfigObject(ctx context.Context, id, targetProjectID int64) (int64, error) {
+	o, err := s.GetConfigObject(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	return s.CreateConfigObject(ctx, ConfigObject{
+		ProjectID:   targetProjectID,
+		Kind:        o.Kind,
+		Name:        o.Name,
+		PayloadJSON: o.PayloadJSON,
+	})
+}
+
 // --- payload shapes for the migrated kinds ---
 
 // BuildItemPayload is the config_objects body for kind=build_item. Field

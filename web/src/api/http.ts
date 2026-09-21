@@ -82,6 +82,13 @@ export const projectApi = {
 	create: (name: string, note: string) =>
 		api<{ id: number }>('/api/projects', { method: 'POST', body: { name, note } }),
 	remove: (id: number) => api(`/api/projects/${id}`, { method: 'DELETE' }),
+	// Cross-project copy + JSON export/import (requirement 1.6).
+	copyConfigObject: (id: number, targetProjectId: number) =>
+		api<{ id: number }>(`/api/config-objects/${id}/copy`, { method: 'POST', body: { target_project_id: targetProjectId } }),
+	exportURL: (projectId: number, kinds?: string) =>
+		`/api/projects/${projectId}/export${kinds ? `?kinds=${kinds}` : ''}`,
+	importBundle: (projectId: number, bundle: Record<string, any>) =>
+		api<{ imported: number; skipped: number }>(`/api/projects/${projectId}/import`, { method: 'POST', body: bundle }),
 }
 
 export const deviceApi = {
@@ -238,6 +245,22 @@ export interface DeployParamDef {
 	value?: string
 }
 
+export interface USBLayoutDef {
+	glob: string
+	dir?: string
+}
+
+export interface USBChecksumDef {
+	name: string
+	glob: string
+}
+
+export interface USBDiskConfig {
+	root_name: string
+	layout?: USBLayoutDef[]
+	checksums?: USBChecksumDef[]
+}
+
 export interface DeployPayload {
 	mode: 'manual' | 'ssh' | 'flash'
 	steps_md?: string
@@ -248,6 +271,7 @@ export interface DeployPayload {
 	flash_device_id?: number
 	flash_steps_json?: string
 	flash_timeout_sec?: number
+	usb_disk?: USBDiskConfig | null
 }
 
 export interface DeployRuleRecord {
@@ -291,6 +315,7 @@ export const deployApi = {
 	list: (projectId: number) => api<DeployRecordRecord[]>(`/api/projects/${projectId}/deployments`),
 	get: (id: number) => api<DeployRecordRecord>(`/api/deployments/${id}`),
 	cancel: (id: number) => api(`/api/deployments/${id}/cancel`, { method: 'POST' }),
+	remove: (id: number) => api(`/api/deployments/${id}`, { method: 'DELETE' }),
 	logTail: (id: number, n = 1000) => api<{ tail: string }>(`/api/deployments/${id}/log/tail?n=${n}`),
 }
 

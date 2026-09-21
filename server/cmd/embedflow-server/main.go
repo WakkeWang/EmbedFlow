@@ -247,6 +247,14 @@ func (h *coordinator) mux(frontDir string) http.Handler {
 	api.HandleFunc("GET /api/deployments/{id}", h.handleGetDeployment)
 	api.HandleFunc("POST /api/deployments/{id}/cancel", h.handleCancelDeployment)
 	api.HandleFunc("GET /api/deployments/{id}/log/tail", h.handleDeployLogTail)
+	api.HandleFunc("DELETE /api/deployments/{id}", h.handleDeleteDeployRecord)
+	api.HandleFunc("GET /api/deploy-rules/{id}/usb-zip", h.handleDeployUSBZip)
+
+	// Cross-project copy + JSON export/import (requirement 1.6). Copy is a
+	// write (new rows): admin. Export reads, import writes.
+	api.Handle("POST /api/config-objects/{id}/copy", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleCopyConfigObject)))
+	api.HandleFunc("GET /api/projects/{pid}/export", h.handleExportProject)
+	api.Handle("POST /api/projects/{pid}/import", authmw.RequireAdmin(admin, http.HandlerFunc(h.handleImportProject)))
 
 	// Device SSH management (requirement 3.2): v2 create/update carry SSH
 	// fields; ssh-test is the manual probe.
