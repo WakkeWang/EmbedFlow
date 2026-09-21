@@ -47,6 +47,8 @@ const detailLog = ref('')
 const detailOpen = ref(false)
 // flash cancel needs the second confirmation (requirement 3.6: 鍗婂埛鎻愮ず)
 const cancelTarget = ref<DeployRecordRecord | null>(null)
+// terminal records are deletable; the confirm dialog guards the click
+const deleteTarget = ref<DeployRecordRecord | null>(null)
 
 let ws: WebSocket | null = null
 let subbed = new Set<number>()
@@ -224,8 +226,78 @@ async function confirmCancel() {
 	}
 }
 
+function askDelete(r: DeployRecordRecord) {
+	deleteTarget.value = r
+}
+
+async function confirmDelete() {
+	if (!deleteTarget.value) return
+	try {
+		await deployApi.remove(deleteTarget.value.id)
+		message.success(t('deploy.deleted'))
+		if (detail.value?.id === deleteTarget.value.id) {
+			detailOpen.value = false
+		}
+		await load()
+	} catch (e) {
+		message.error(String(e))
+	} finally {
+		deleteTarget.value = null
+	}
+}
+
+// USB stick zip for the detail's rule + build record (requirement 3.1.3
+// second half). A plain browser navigation carries the auth cookie? No --
+// the API is Bearer-token gated, so fetch the blob with the header and
+// save it client-side.
+const usbBusy = ref(false)
+async function downloadUSBZip() {
+	const d = detail.value
+	if (!d || !d.rule_id || !d.build_record_id) {
+		message.warning(t('deploy.usbPickBuildFirst'))
+		return
+	}
+	usbBusy.value = true
+	try {
+		const res = await fetch(`/api/deploy-rules/${d.rule_id}/usb-zip?build_record_id=${d.build_record_id}`, {
+			headers: { Authorization: `Bearer ${localStorage.getItem('embedflow.token') ?? ''}` },
+		})
+		if (!res.ok) {
+			let detailMsg = String(res.status)
+			try {
+				const body = await res.json()
+				detailMsg = body.error ?? detailMsg
+			} catch {
+				/* non-JSON error body */
+			}
+			message.error(detailMsg)
+			return
+		}
+		const blob = await res.blob()
+		const url = URL.createObjectURL(blob)
+		const a = document.createElement('a')
+		a.href = url
+		a.download = `usb-deploy-rule${d.rule_id}-build${d.build_record_id}.zip`
+		a.click()
+		URL.revokeObjectURL(url)
+	} catch (e) {
+		message.error(String(e))
+	} finally {
+		usbBusy.value = false
+	}
+}
+
 const statusType = (s: string) =>
 	s === 'succeeded' ? 'success' : s === 'failed' ? 'error' : s === 'running' ? 'info' : 'warning'
+
+// The detail's rule carries the usb_disk section when stick packaging is
+// configured (the button only shows then).
+const detailHasUSB = computed(() => {
+	const d = detail.value
+	if (!d || !d.rule_id || !d.build_record_id) return false
+	const rule = rules.value.find((x) => x.id === d.rule_id)
+	return !!rule?.payload?.usb_disk
+})
 </script>
 
 <template>
@@ -256,6 +328,14 @@ const statusType = (s: string) =>
 					@click.stop="askCancel(r)"
 				>
 					{{ t('deploy.cancel') }}
+				</NButton>
+				<NButton
+					v-if="r.status !== 'running'"
+					size="tiny"
+					quaternary
+					@click.stop="askDelete(r)"
+				>
+					{{ t('deploy.delete') }}
 				</NButton>
 			</div>
 		</div>
@@ -296,6 +376,9 @@ const statusType = (s: string) =>
 			<NSpace v-if="detail">
 				<NTag :type="statusType(detail.status)">{{ t('deploy.status_' + detail.status) }}</NTag>
 				<span class="muted">{{ detail.detail }}</span>
+				<NButton v-if="detailHasUSB" size="small" type="primary" :loading="usbBusy" @click="downloadUSBZip">
+					{{ t('deploy.usbDownload') }}
+				</NButton>
 			</NSpace>
 			<pre class="log-box mono">{{ detailLog || t('deploy.noLog') }}</pre>
 		</NModal>
@@ -312,6 +395,19 @@ const statusType = (s: string) =>
 			:negative-text="t('common.cancel')"
 			@positive-click="confirmCancel"
 			@negative-click="cancelTarget = null"
+		/>
+
+		<!-- record delete: terminal records only, guarded -->
+		<NModal
+			:show="deleteTarget !== null"
+			preset="dialog"
+			type="warning"
+			:title="t('deploy.deleteConfirmTitle')"
+			:content="t('deploy.deleteConfirmBody')"
+			:positive-text="t('deploy.delete')"
+			:negative-text="t('common.cancel')"
+			@positive-click="confirmDelete"
+			@negative-click="deleteTarget = null"
 		/>
 	</div>
 </template>

@@ -9,10 +9,11 @@ import {
 	NTag,
 	NEmpty,
 	NSpace,
+	NModal,
 	useMessage,
 } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import { deployRuleApi, deviceApi, type DeployRuleRecord, type DeployPayload, type Device } from '../api/http'
+import { deployRuleApi, deviceApi, projectApi, type DeployRuleRecord, type DeployPayload, type Device, type ProjectRecord } from '../api/http'
 import { useProject } from '../store/project'
 import { useAuth } from '../store/auth'
 
@@ -76,6 +77,15 @@ function newRule() {
 	flashStepsText.value = '[]'
 }
 
+// Ensure the optional usb_disk section exists for editing (undefined in
+// stored payloads that predate it, and in new rules).
+function usbOf(p: DeployPayload): NonNullable<DeployPayload['usb_disk']> {
+	if (!p.usb_disk) {
+		p.usb_disk = { root_name: '', layout: [], checksums: [] }
+	}
+	return p.usb_disk
+}
+
 function editRule(r: RuleVM) {
 	editor.value = { ...r, payload: { ...r.payload } }
 	flashStepsText.value = r.payload.flash_steps_json || '[]'
@@ -109,6 +119,9 @@ async function save() {
 		flash_device_id: p.flash_device_id,
 		flash_steps: p.flash_steps_json,
 		flash_timeout_sec: p.flash_timeout_sec,
+		usb_disk: p.usb_disk && (p.usb_disk.root_name || p.usb_disk.layout?.length || p.usb_disk.checksums?.length)
+			? p.usb_disk
+			: null,
 	}
 	try {
 		if (editor.value.id) {
@@ -149,6 +162,53 @@ function removeCommand(i: number) {
 	editor.value?.payload.ssh_commands?.splice(i, 1)
 }
 
+function addUsbLayout(p: DeployPayload) {
+	usbOf(p).layout?.push({ glob: '', dir: '.' })
+}
+
+function removeUsbLayout(p: DeployPayload, i: number) {
+	usbOf(p).layout?.splice(i, 1)
+}
+
+function addUsbChecksum(p: DeployPayload) {
+	usbOf(p).checksums?.push({ name: '', glob: '' })
+}
+
+function removeUsbChecksum(p: DeployPayload, i: number) {
+	usbOf(p).checksums?.splice(i, 1)
+}
+
+// Cross-project copy (requirement 1.6): pick a target project, the rule
+// lands there as a new row with the same payload.
+const copyTarget = ref<DeployRuleRecord | null>(null)
+const copyProjects = ref<ProjectRecord[]>([])
+const copyTo = ref<number | null>(null)
+
+async function askCopy(r: DeployRuleRecord) {
+	copyTarget.value = r
+	if (copyProjects.value.length === 0) {
+		try {
+			copyProjects.value = await projectApi.list()
+		} catch {
+			copyProjects.value = []
+		}
+	}
+	const others = copyProjects.value.filter((p) => p.id !== currentId.value)
+	copyTo.value = others[0]?.id ?? null
+}
+
+async function confirmCopy() {
+	if (!copyTarget.value || !copyTo.value) return
+	try {
+		await projectApi.copyConfigObject(copyTarget.value.id, copyTo.value)
+		message.success(t('project.copied'))
+	} catch (e) {
+		message.error(String(e))
+	} finally {
+		copyTarget.value = null
+	}
+}
+
 const modeTag = (m: string) =>
 	m === 'ssh' ? 'info' : m === 'flash' ? 'warning' : 'default'
 </script>
@@ -178,6 +238,7 @@ const modeTag = (m: string) =>
 				</div>
 				<NSpace>
 					<NButton v-if="isAdmin" size="small" @click="editRule(r)">{{ t('expect.edit') }}</NButton>
+					<NButton v-if="isAdmin" size="small" @click="askCopy(r)">{{ t('project.copyTo') }}</NButton>
 					<NButton v-if="isAdmin" size="small" type="error" quaternary @click="removeRule(r)">
 						{{ t('expect.delete') }}
 					</NButton>
@@ -194,6 +255,33 @@ const modeTag = (m: string) =>
 
 			<NCard size="small" :title="t('deploy.mode')" class="form-card">
 				<NSelect v-model:value="editor.payload.mode" :options="modeOptions" style="width: 200px" />
+			</NCard>
+
+			<!-- USB stick packaging (requirement 3.1.3 second half): optional
+			     for every mode -- the zip is generated from a build record's
+			     artifacts on demand. -->
+			<NCard size="small" :title="t('deploy.usbTitle')" class="form-card">
+				<div class="hint">{{ t('deploy.usbHint') }}</div>
+				<div class="form-grid">
+					<label>{{ t('deploy.usbRoot') }}</label>
+					<NInput v-model:value="usbOf(editor.payload).root_name" :placeholder="t('deploy.usbRootHint')" style="width: 320px" />
+				</div>
+				<div class="hint">{{ t('deploy.usbLayoutHint') }}</div>
+				<div v-for="(l, i) in usbOf(editor.payload).layout" :key="'l' + i" class="param-row">
+					<NInput v-model:value="l.glob" :placeholder="t('deploy.usbGlobPh')" style="width: 260px" />
+					<span class="muted">-></span>
+					<NInput v-model:value="l.dir" placeholder="." style="width: 180px" />
+					<NButton size="tiny" quaternary type="error" @click="removeUsbLayout(editor.payload, i)">{{ t('expect.delete') }}</NButton>
+				</div>
+				<NButton size="small" @click="addUsbLayout(editor.payload)">{{ t('deploy.usbAddLayout') }}</NButton>
+				<div class="hint" style="margin-top: 10px">{{ t('deploy.usbCsumHint') }}</div>
+				<div v-for="(c, i) in usbOf(editor.payload).checksums" :key="'c' + i" class="param-row">
+					<NInput v-model:value="c.name" :placeholder="t('deploy.usbFieldPh')" style="width: 160px" />
+					<span class="muted">=</span>
+					<NInput v-model:value="c.glob" :placeholder="t('deploy.usbGlobPh')" style="width: 260px" />
+					<NButton size="tiny" quaternary type="error" @click="removeUsbChecksum(editor.payload, i)">{{ t('expect.delete') }}</NButton>
+				</div>
+				<NButton size="small" @click="addUsbChecksum(editor.payload)">{{ t('deploy.usbAddCsum') }}</NButton>
 			</NCard>
 
 			<!-- manual: markdown steps (requirement 3.1.1) -->
@@ -256,6 +344,30 @@ const modeTag = (m: string) =>
 				</NCard>
 			</template>
 		</div>
+
+		<!-- copy-to-project modal (requirement 1.6) -->
+		<NModal
+			:show="copyTarget !== null"
+			preset="dialog"
+			:title="t('project.copyTo')"
+			:show-icon="false"
+			style="width: 420px"
+			@positive-click="confirmCopy"
+			@negative-click="copyTarget = null"
+		>
+			<div class="form-grid">
+				<label>{{ t('project.copyTarget') }}</label>
+				<NSelect
+					v-model:value="copyTo"
+					:options="copyProjects.filter((p) => p.id !== currentId).map((p) => ({ label: p.name, value: p.id }))"
+					:placeholder="t('project.copyNoTarget')"
+				/>
+			</div>
+			<template #action>
+				<NButton @click="copyTarget = null">{{ t('common.cancel') }}</NButton>
+				<NButton type="primary" :disabled="!copyTo" @click="confirmCopy">{{ t('common.confirm') }}</NButton>
+			</template>
+		</NModal>
 	</div>
 </template>
 

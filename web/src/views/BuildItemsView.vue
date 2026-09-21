@@ -14,7 +14,7 @@ import {
 	useMessage,
 } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
-import { buildItemApi, type BuildItemRecord } from '../api/http'
+import { buildItemApi, projectApi, type BuildItemRecord, type ProjectRecord } from '../api/http'
 import { useProject } from '../store/project'
 import { useAuth } from '../store/auth'
 
@@ -158,6 +158,37 @@ async function removeItem(it: BuildItemRecord) {
 	}
 }
 
+// Cross-project copy (requirement 1.6): the same modal pattern as the
+// deploy rules page; build items carry their prereq JSON verbatim.
+const copyTarget = ref<BuildItemRecord | null>(null)
+const copyProjects = ref<ProjectRecord[]>([])
+const copyTo = ref<number | null>(null)
+
+async function askCopy(it: BuildItemRecord) {
+	copyTarget.value = it
+	if (copyProjects.value.length === 0) {
+		try {
+			copyProjects.value = await projectApi.list()
+		} catch {
+			copyProjects.value = []
+		}
+	}
+	const others = copyProjects.value.filter((p) => p.id !== currentId.value)
+	copyTo.value = others[0]?.id ?? null
+}
+
+async function confirmCopy() {
+	if (!copyTarget.value || !copyTo.value) return
+	try {
+		await projectApi.copyConfigObject(copyTarget.value.id, copyTo.value)
+		message.success(t('project.copied'))
+	} catch (e) {
+		message.error(String(e))
+	} finally {
+		copyTarget.value = null
+	}
+}
+
 // --- prerequisite group editing ---
 
 function addGroup() {
@@ -223,6 +254,7 @@ const sourceOptions = [
 				<div class="mono item-cmd">{{ it.command }}</div>
 				<NSpace>
 					<NButton v-if="isAdmin" size="small" @click="editRule(it)">{{ t('expect.edit') }}</NButton>
+					<NButton v-if="isAdmin" size="small" @click="askCopy(it)">{{ t('project.copyTo') }}</NButton>
 					<NButton v-if="isAdmin" size="small" type="error" quaternary @click="removeItem(it)">
 						{{ t('expect.delete') }}
 					</NButton>
@@ -320,6 +352,29 @@ const sourceOptions = [
 				<NSelect :options="pickerOptions" @update:value="(v: number) => pickPrereq(v)" />
 			</NModal>
 		</div>
+
+		<!-- copy-to-project modal (requirement 1.6) -->
+		<NModal
+			:show="copyTarget !== null"
+			preset="dialog"
+			:title="t('project.copyTo')"
+			:show-icon="false"
+			style="width: 420px"
+			@negative-click="copyTarget = null"
+		>
+			<div class="form-grid">
+				<label>{{ t('project.copyTarget') }}</label>
+				<NSelect
+					v-model:value="copyTo"
+					:options="copyProjects.filter((p) => p.id !== currentId).map((p) => ({ label: p.name, value: p.id }))"
+					:placeholder="t('project.copyNoTarget')"
+				/>
+			</div>
+			<template #action>
+				<NButton @click="copyTarget = null">{{ t('common.cancel') }}</NButton>
+				<NButton type="primary" :disabled="!copyTo" @click="confirmCopy">{{ t('common.confirm') }}</NButton>
+			</template>
+		</NModal>
 	</div>
 </template>
 

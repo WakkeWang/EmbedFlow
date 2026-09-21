@@ -1,9 +1,10 @@
 ﻿<script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { NGrid, NGridItem, NCard, NButton, NEmpty, NTag, NModal, NInput, useMessage } from 'naive-ui'
+import { NGrid, NGridItem, NCard, NButton, NEmpty, NTag, NModal, NInput, NSpace, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { useProject } from '../store/project'
+import { projectApi, getToken } from '../api/http'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -14,6 +15,9 @@ const showNew = ref(false)
 const newName = ref('')
 const newNote = ref('')
 const deleteTarget = ref<{ id: number; name: string } | null>(null)
+
+// Import: a JSON bundle file loads into the currently selected project.
+const importInput = ref<HTMLInputElement | null>(null)
 
 onMounted(load)
 
@@ -44,6 +48,53 @@ async function confirmDelete() {
 		deleteTarget.value = null
 	} catch (e) {
 		message.error(String(e))
+	}
+}
+
+// Export the project's rules (+ devices) as one JSON download. The export
+// endpoint is Bearer-gated like every API route, so fetch with the header
+// instead of a plain navigation.
+async function exportProject(id: number, name: string) {
+	try {
+		const res = await fetch(projectApi.exportURL(id), {
+			headers: { Authorization: `Bearer ${getToken()}` },
+		})
+		if (!res.ok) {
+			message.error(String(res.status))
+			return
+		}
+		const blob = await res.blob()
+		const url = URL.createObjectURL(blob)
+		const a = document.createElement('a')
+		a.href = url
+		a.download = `embedflow-export-${name}.json`
+		a.click()
+		URL.revokeObjectURL(url)
+	} catch (e) {
+		message.error(String(e))
+	}
+}
+
+async function onImportFile(ev: Event) {
+	const file = (ev.target as HTMLInputElement).files?.[0]
+	;(ev.target as HTMLInputElement).value = ''
+	if (!file) return
+	if (!current.value) {
+		message.warning(t('project.importFileFirst'))
+		return
+	}
+	let bundle: Record<string, any>
+	try {
+		bundle = JSON.parse(await file.text())
+	} catch {
+		message.error(t('project.importBad'))
+		return
+	}
+	try {
+		const res = await projectApi.importBundle(current.value.id, bundle)
+		message.success(t('project.importedN', { n: res.imported }))
+	} catch (e) {
+		message.error(t('project.importBad'))
 	}
 }
 
@@ -105,11 +156,18 @@ function go(path: string) {
 			<div class="project-list">
 				<div class="list-head">
 					<h3>{{ t('project.list') }}</h3>
+					<NSpace>
+						<NButton size="tiny" @click="importInput?.click()">{{ t('project.import') }}</NButton>
+						<input ref="importInput" type="file" accept=".json,application/json" style="display: none" @change="onImportFile" />
+					</NSpace>
 				</div>
 				<div v-for="p in projects" :key="p.id" class="project-row" :class="{ active: p.id === current?.id }">
 					<span class="project-dot"></span>
 					<span class="project-name">{{ p.name }}</span>
 					<span class="muted note">{{ p.note }}</span>
+					<NButton size="tiny" quaternary class="row-del" @click="exportProject(p.id, p.name)">
+						{{ t('project.export') }}
+					</NButton>
 					<NButton
 						size="tiny"
 						quaternary
@@ -232,6 +290,11 @@ function go(path: string) {
 }
 .project-list {
 	margin-top: 26px;
+}
+.list-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
 }
 .list-head h3 {
 	font-size: 15px;
