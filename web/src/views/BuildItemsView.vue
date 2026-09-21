@@ -14,6 +14,7 @@ import {
 	useMessage,
 } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { buildItemApi, projectApi, type BuildItemRecord, type ProjectRecord } from '../api/http'
 import { useProject } from '../store/project'
 import { useAuth } from '../store/auth'
@@ -22,6 +23,7 @@ import { useAuth } from '../store/auth'
 // artifact globs, timeout, version command, prerequisite groups
 // (group-internal OR, group-to-group AND -- requirement 2.3).
 const { t } = useI18n()
+const router = useRouter()
 const message = useMessage()
 const { currentId } = useProject()
 const { isAdmin } = useAuth()
@@ -158,6 +160,13 @@ async function removeItem(it: BuildItemRecord) {
 	}
 }
 
+// One-click build (the card's primary action): lands on the batches page
+// with this item pre-selected -- the trigger lives there because a batch
+// may pull in prerequisites beyond the selection.
+function buildNow(it: BuildItemRecord) {
+	router.push({ path: '/build/batches', query: { build: String(it.id) } })
+}
+
 // Cross-project copy (requirement 1.6): the same modal pattern as the
 // deploy rules page; build items carry their prereq JSON verbatim.
 const copyTarget = ref<BuildItemRecord | null>(null)
@@ -253,6 +262,7 @@ const sourceOptions = [
 				</template>
 				<div class="mono item-cmd">{{ it.command }}</div>
 				<NSpace>
+					<NButton type="primary" size="small" @click="buildNow(it)">{{ t('build.build') }}</NButton>
 					<NButton v-if="isAdmin" size="small" @click="editRule(it)">{{ t('expect.edit') }}</NButton>
 					<NButton v-if="isAdmin" size="small" @click="askCopy(it)">{{ t('project.copyTo') }}</NButton>
 					<NButton v-if="isAdmin" size="small" type="error" quaternary @click="removeItem(it)">

@@ -12,7 +12,7 @@ import {
 } from 'naive-ui'
 import { h } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import {
 	batchApi,
 	buildItemApi,
@@ -31,6 +31,7 @@ import { Frame, type BuildEventFrame } from '../api/frames'
 const { t } = useI18n()
 const message = useMessage()
 const router = useRouter()
+const route = useRoute()
 const { currentId } = useProject()
 
 const items = ref<BuildItemRecord[]>([])
@@ -98,6 +99,14 @@ async function load() {
 		batches.value = await batchApi.list(currentId.value)
 	} catch {
 		batches.value = []
+	}
+	// A build-items card's 构建 button lands here with ?build=<id>: preselect
+	// that item so one click on 触发构建 runs it.
+	const preselect = Number(route.query.build)
+	if (preselect && items.value.some((it) => it.id === preselect) && !checked.value.includes(preselect)) {
+		checked.value = [...checked.value, preselect]
+		// Drop the query so a page refresh does not re-append the selection.
+		router.replace({ query: { ...route.query, build: undefined } })
 	}
 }
 
@@ -253,6 +262,7 @@ const itemOptions = computed(() =>
 
 		<template v-else>
 			<NCard size="small" :title="t('build.trigger')" class="trigger-card">
+				<div class="hint" style="margin-bottom: 8px">{{ t('build.pickItems') }}</div>
 				<NSelect
 					v-model:value="checked"
 					multiple
