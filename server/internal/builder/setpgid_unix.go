@@ -15,15 +15,11 @@ func setPgid(cmd *exec.Cmd) {
 }
 
 // killProcessTree kills the process group of a still-running command.
-// On unix the Setpgid'd group id equals the pid, so one signal reaps the
-// shell and every child it spawned.
+// On unix the Setpgid'd group id equals the child's pid, so one signal
+// reaps the shell and every child it spawned.
 func killProcessTree(cmd *exec.Cmd) {
 	if cmd.Process == nil {
 		return
 	}
-	if cmd.Process.Pgid > 0 {
-		_ = syscall.Kill(-cmd.Process.Pgid, syscall.SIGKILL)
-		return
-	}
-	_ = cmd.Process.Kill()
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 }
