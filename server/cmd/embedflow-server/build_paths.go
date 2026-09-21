@@ -11,6 +11,10 @@ func buildLogPath(dataDir string, recordID int64) string {
 	return paths.BuildLog(dataDir, recordID)
 }
 
+func buildLogDirPath(dataDir string, recordID int64) string {
+	return paths.BuildLogDir(dataDir, recordID)
+}
+
 func artifactDirPath(dataDir string, recordID int64) string {
 	return paths.ArtifactDir(dataDir, recordID)
 }

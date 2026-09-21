@@ -217,3 +217,43 @@ func TestConfigObjects_CopyAcrossProjects(t *testing.T) {
 		t.Fatalf("source moved: %+v", orig)
 	}
 }
+
+func TestConfigObjects_CopySameProjectSuffixes(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	pid, _ := s.CreateProject(ctx, "P-copy", "")
+
+	id, err := s.CreateConfigObject(ctx, ConfigObject{
+		ProjectID: pid, Kind: KindDeployRule, Name: "flash-via-usb", PayloadJSON: `{"mode":"manual"}`,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Same-project copy: allowed, gets -1, then -2.
+	c1, err := s.CopyConfigObject(ctx, id, pid)
+	if err != nil {
+		t.Fatalf("same-project copy: %v", err)
+	}
+	got, _ := s.GetConfigObject(ctx, c1)
+	if got.Name != "flash-via-usb-1" || got.ProjectID != pid {
+		t.Fatalf("copy 1 = %+v", got)
+	}
+	c2, err := s.CopyConfigObject(ctx, id, pid)
+	if err != nil {
+		t.Fatalf("copy 2: %v", err)
+	}
+	got2, _ := s.GetConfigObject(ctx, c2)
+	if got2.Name != "flash-via-usb-2" {
+		t.Fatalf("copy 2 name = %s", got2.Name)
+	}
+	// Cross-project copy keeps the plain name (no clash there).
+	other, _ := s.CreateProject(ctx, "P-other", "")
+	c3, err := s.CopyConfigObject(ctx, id, other)
+	if err != nil {
+		t.Fatalf("cross copy: %v", err)
+	}
+	got3, _ := s.GetConfigObject(ctx, c3)
+	if got3.Name != "flash-via-usb" {
+		t.Fatalf("cross copy name = %s", got3.Name)
+	}
+}

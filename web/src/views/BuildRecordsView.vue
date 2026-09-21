@@ -204,9 +204,9 @@ const artifactColumns = computed<DataTableColumns<ArtifactRecord>>(() => [
 ])
 
 const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
-	{ title: '#', key: 'id', width: 60 },
+	{ title: t('build.recordNo'), key: 'id', width: 70 },
 	{ title: t('build.batch'), key: 'batch_id', width: 80, render: (r) => `#${r.batch_id}` },
-	{ title: t('build.item'), key: 'item', render: (r) => itemName(r.item_id) },
+	{ title: t('build.item'), key: 'item', width: 170, ellipsis: { tooltip: true }, render: (r) => itemName(r.item_id) },
 	{
 		title: t('history.state'),
 		key: 'status',
@@ -217,7 +217,7 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 		h('span', { class: 'mono', style: 'font-size:12px' }, r.branch || '-') },
 	{ title: t('build.commitShort'), key: 'commit_sha', width: 120, render: (r) =>
 		h('span', { class: 'mono', style: 'font-size:12px' }, r.commit_sha ? r.commit_sha.slice(0, 8) : '-') },
-	{ title: t('history.start'), key: 'started_at', render: (r) => fmtTime(r.started_at) },
+	{ title: t('history.start'), key: 'started_at', width: 170, render: (r) => fmtTime(r.started_at) },
 	{
 		title: t('history.log'),
 		key: 'log',

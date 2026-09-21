@@ -222,6 +222,7 @@ func (h *coordinator) mux(frontDir string) http.Handler {
 	api.HandleFunc("GET /api/batches", h.handleListBatches)
 	api.HandleFunc("GET /api/batches/{id}", h.handleGetBatch)
 	api.HandleFunc("POST /api/batches/{id}/cancel", h.handleCancelBatch)
+	api.HandleFunc("POST /api/batches/delete", h.handleDeleteBatches)
 	api.HandleFunc("GET /api/build-records", h.handleListBuildRecords)
 	api.HandleFunc("GET /api/build-records/{id}", h.handleGetBuildRecord)
 	api.HandleFunc("GET /api/build-records/{id}/artifacts", h.handleRecordArtifacts)

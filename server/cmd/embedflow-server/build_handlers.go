@@ -288,6 +288,60 @@ func (h *coordinator) handleCancelBatch(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleDeleteBatches removes terminal batches with their records,
+// artifacts and files. Body: {"ids": [..]} or {"all": true, "project_id": n}
+// for the whole project's non-live batches. A queued/running batch fails
+// the whole request with 409 -- cancel it first.
+func (h *coordinator) handleDeleteBatches(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs       []int64 `json:"ids"`
+		All       bool    `json:"all"`
+		ProjectID int64   `json:"project_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad body")
+		return
+	}
+	if body.All {
+		if body.ProjectID == 0 {
+			writeErr(w, http.StatusBadRequest, "project_id required with all")
+			return
+		}
+		batches, err := h.store.ListBatchesByProject(r.Context(), body.ProjectID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for _, bt := range batches {
+			body.IDs = append(body.IDs, bt.ID)
+		}
+	}
+	if len(body.IDs) == 0 {
+		writeErr(w, http.StatusBadRequest, "ids required")
+		return
+	}
+	var refused []string
+	deleted := 0
+	for _, id := range body.IDs {
+		if err := h.builds.DeleteBatch(id); err != nil {
+			if strings.Contains(err.Error(), "cancel it first") {
+				refused = append(refused, strconv.FormatInt(id, 10))
+				continue
+			}
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
+		deleted++
+	}
+	if len(refused) > 0 {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "these batches are live: cancel them first", "batches": refused,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"deleted": deleted})
+}
+
 // --- build records ---
 
 func (h *coordinator) handleGetBuildRecord(w http.ResponseWriter, r *http.Request) {

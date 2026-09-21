@@ -219,6 +219,9 @@ export const batchApi = {
 	list: (projectId: number) => api<BatchRecord[]>(`/api/batches?project_id=${projectId}`),
 	get: (id: number) => api<{ batch: BatchRecord; records: BuildRecordRecord[] }>(`/api/batches/${id}`),
 	cancel: (id: number) => api(`/api/batches/${id}/cancel`, { method: 'POST' }),
+	remove: (ids: number[]) => api<{ deleted: number }>('/api/batches/delete', { method: 'POST', body: { ids } }),
+	removeAll: (projectId: number) =>
+		api<{ deleted: number }>('/api/batches/delete', { method: 'POST', body: { all: true, project_id: projectId } }),
 }
 
 export const buildRecordApi = {

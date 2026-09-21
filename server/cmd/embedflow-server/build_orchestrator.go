@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -371,6 +372,30 @@ func (b *buildOrchestrator) CancelBatch(batchID int64) error {
 		b.applyEvent(ev, batchID, 0, "")
 	}
 	return nil
+}
+
+// DeleteBatch removes a terminal batch with its records, artifact rows and
+// disk files (the batch history page's delete action). A queued/running
+// batch is refused -- cancel it first.
+func (b *buildOrchestrator) DeleteBatch(batchID int64) error {
+	bt, err := b.store.GetBatch(context.Background(), batchID)
+	if err != nil {
+		return err
+	}
+	if bt.Status == batch.BatchQueued || bt.Status == batch.BatchRunning {
+		return fmt.Errorf("batch is %s: cancel it first", bt.Status)
+	}
+	recs, err := b.store.RecordsForBatch(context.Background(), batchID)
+	if err != nil {
+		return err
+	}
+	for _, rec := range recs {
+		_ = b.store.DeleteArtifactsForRecord(context.Background(), rec.ID)
+		_ = os.RemoveAll(buildLogDirPath(b.hub.dataDir, rec.ID))
+		_ = os.RemoveAll(artifactDirPath(b.hub.dataDir, rec.ID))
+		_ = b.store.DeleteBuildRecord(context.Background(), rec.ID)
+	}
+	return b.store.DeleteBatch(context.Background(), batchID)
 }
 
 func (b *buildOrchestrator) recordsOf(batchID int64) []int64 {

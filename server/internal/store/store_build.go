@@ -328,6 +328,15 @@ func (s *Store) DeleteBuildRecord(ctx context.Context, id int64) error {
 	})
 }
 
+// DeleteBatch removes one batch row. Callers delete the batch's records,
+// artifacts and files around it (the store owns rows only).
+func (s *Store) DeleteBatch(ctx context.Context, id int64) error {
+	return s.enqueue(ctx, func() error {
+		_, err := s.db.ExecContext(ctx, "DELETE FROM batches WHERE id = ?", id)
+		return err
+	})
+}
+
 // --- artifacts ---
 
 // InsertArtifacts stores the archived artifact list for a record.

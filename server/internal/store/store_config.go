@@ -163,7 +163,9 @@ func (s *Store) DeleteConfigObject(ctx context.Context, id int64) error {
 }
 
 // CopyConfigObject duplicates one object into another project (requirement
-// 1.6 跨工程复制粘贴): same kind, name and payload, fresh id. The cross-
+// 1.6 跨工程复制粘贴): same kind, name and payload, fresh id. When the target
+// project already holds a same-kind object with the same name, the copy
+// gets a "-1"/"-2" suffix so duplicates stay distinguishable. The cross-
 // project reference inside build items' prereq JSON is copied verbatim --
 // references are logical ids and stay valid across projects (batch planning
 // reads them cross-project anyway).
@@ -172,10 +174,27 @@ func (s *Store) CopyConfigObject(ctx context.Context, id, targetProjectID int64)
 	if err != nil {
 		return 0, err
 	}
+	name := o.Name
+	siblings, err := s.ListConfigObjects(ctx, targetProjectID, o.Kind)
+	if err == nil {
+		taken := map[string]bool{}
+		for _, sib := range siblings {
+			taken[sib.Name] = true
+		}
+		if taken[name] {
+			for i := 1; ; i++ {
+				candidate := fmt.Sprintf("%s-%d", o.Name, i)
+				if !taken[candidate] {
+					name = candidate
+					break
+				}
+			}
+		}
+	}
 	return s.CreateConfigObject(ctx, ConfigObject{
 		ProjectID:   targetProjectID,
 		Kind:        o.Kind,
-		Name:        o.Name,
+		Name:        name,
 		PayloadJSON: o.PayloadJSON,
 	})
 }

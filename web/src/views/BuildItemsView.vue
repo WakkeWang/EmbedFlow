@@ -175,8 +175,9 @@ function buildNow(it: BuildItemRecord) {
 	router.push({ path: '/build/batches', query: { build: String(it.id) } })
 }
 
-// Cross-project copy (requirement 1.6): the same modal pattern as the
-// deploy rules page; build items carry their prereq JSON verbatim.
+// Copy (requirement 1.6): cross-project via the picker, same-project via
+// the "copy here" action -- both are CopyConfigObject under the hood (the
+// unified table has no same-project constraint).
 const copyTarget = ref<BuildItemRecord | null>(null)
 const copyProjects = ref<ProjectRecord[]>([])
 const copyTo = ref<number | null>(null)
@@ -190,8 +191,7 @@ async function askCopy(it: BuildItemRecord) {
 			copyProjects.value = []
 		}
 	}
-	const others = copyProjects.value.filter((p) => p.id !== currentId.value)
-	copyTo.value = others[0]?.id ?? null
+	copyTo.value = currentId.value
 }
 
 async function confirmCopy() {
@@ -199,6 +199,7 @@ async function confirmCopy() {
 	try {
 		await projectApi.copyConfigObject(copyTarget.value.id, copyTo.value)
 		message.success(t('project.copied'))
+		await load()
 	} catch (e) {
 		message.error(String(e))
 	} finally {
@@ -382,22 +383,25 @@ const sourceOptions = [
 			</NModal>
 		</div>
 
-		<!-- copy-to-project modal (requirement 1.6) -->
+		<!-- copy modal (requirement 1.6): the current project is a valid
+		     target too -- the backend suffixes "-1"/"-2" on name clashes. -->
 		<NModal
 			:show="copyTarget !== null"
 			preset="dialog"
 			:title="t('project.copyTo')"
 			:show-icon="false"
 			style="width: 420px"
-			@negative-click="copyTarget = null"
+			@update:show="copyTarget = $event ? copyTarget : null"
 		>
 			<div class="form-grid">
 				<label>{{ t('project.copyTarget') }}</label>
 				<NSelect
 					v-model:value="copyTo"
-					:options="copyProjects.filter((p) => p.id !== currentId).map((p) => ({ label: p.name, value: p.id }))"
+					:options="copyProjects.map((p) => ({ label: p.id === currentId ? `${p.name} (${t('project.copyHere')})` : p.name, value: p.id }))"
 					:placeholder="t('project.copyNoTarget')"
 				/>
+				<div></div>
+				<div class="hint">{{ t('project.copySuffixHint') }}</div>
 			</div>
 			<template #action>
 				<NButton @click="copyTarget = null">{{ t('common.cancel') }}</NButton>

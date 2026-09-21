@@ -8,6 +8,7 @@ import {
 	NDataTable,
 	NModal,
 	NSelect,
+	NCheckbox,
 	type DataTableColumns,
 	useMessage,
 } from 'naive-ui'
@@ -261,6 +262,43 @@ const detailColumns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 const itemOptions = computed(() =>
 	items.value.map((it) => ({ label: it.name, value: it.id as number })),
 )
+
+// Batch selection (0.80 feedback: delete some or all batch history).
+const checkedBatches = ref<number[]>([])
+const deletableBatches = computed(() => batches.value.filter((b) => b.status !== 'queued' && b.status !== 'running'))
+const allBatchesChecked = computed(
+	() => deletableBatches.value.length > 0 && deletableBatches.value.every((b) => checkedBatches.value.includes(b.id)),
+)
+
+function toggleBatch(id: number, v: boolean) {
+	if (v) {
+		if (!checkedBatches.value.includes(id)) checkedBatches.value = [...checkedBatches.value, id]
+	} else {
+		checkedBatches.value = checkedBatches.value.filter((x) => x !== id)
+	}
+}
+
+function toggleAllBatches(v: boolean) {
+	checkedBatches.value = v ? deletableBatches.value.map((b) => b.id) : []
+}
+
+// Deleting terminal batches also drops their records/artifacts (server
+// side); the confirm dialog states that.
+const deleteTargetBatches = ref<number[] | null>(null)
+
+async function confirmDeleteBatches() {
+	if (!deleteTargetBatches.value) return
+	try {
+		await batchApi.remove(deleteTargetBatches.value)
+		message.success(t('common.confirm'))
+		checkedBatches.value = []
+		await load()
+	} catch (e) {
+		message.error(String(e))
+	} finally {
+		deleteTargetBatches.value = null
+	}
+}
 </script>
 
 <template>
@@ -297,25 +335,52 @@ const itemOptions = computed(() =>
 			</NCard>
 
 			<NEmpty v-if="batches.length === 0" :description="t('build.batchesEmpty')" style="margin-top: 20px" />
-			<NCard v-for="b in batches" :key="b.id" size="small" class="batch-card" @click="openDetail(b.id)">
-				<div class="batch-row">
-					<span class="batch-id mono">#{{ b.id }}</span>
-					<NTag size="small" :type="statusType(b.status)">{{ t('build.batch_' + b.status) }}</NTag>
-					<span class="hint">{{ b.created_by }}</span>
-					<span v-if="b.status === 'queued' || b.status === 'running'" class="hint mono">{{ batchAge(b) }}</span>
-					<span class="flex1"></span>
+			<template v-else>
+				<div class="batch-toolbar">
+					<NCheckbox
+						:checked="allBatchesChecked"
+						:indeterminate="checkedBatches.length > 0 && !allBatchesChecked"
+						@update:checked="toggleAllBatches"
+					>
+						{{ t('build.selectAll') }}
+					</NCheckbox>
 					<NButton
-						v-if="b.status === 'queued' || b.status === 'running'"
-						size="tiny"
+						size="small"
 						type="error"
 						quaternary
-						@click.stop="cancelBatch(b)"
+						:disabled="checkedBatches.length === 0"
+						@click="deleteTargetBatches = [...checkedBatches]"
 					>
-						{{ t('expect.abort') }}
+						{{ t('build.deleteSelected', { n: checkedBatches.length }) }}
 					</NButton>
 				</div>
-			</NCard>
+				<NCard v-for="b in batches" :key="b.id" size="small" class="batch-card" @click="openDetail(b.id)">
+					<div class="batch-row">
+						<NCheckbox
+							:checked="checkedBatches.includes(b.id)"
+							:disabled="b.status === 'queued' || b.status === 'running'"
+							@click.stop
+							@update:checked="(v: boolean) => toggleBatch(b.id, v)"
+						/>
+						<span class="batch-id mono">#{{ b.id }}</span>
+						<NTag size="small" :type="statusType(b.status)">{{ t('build.batch_' + b.status) }}</NTag>
+						<span class="hint">{{ b.created_by }}</span>
+						<span v-if="b.status === 'queued' || b.status === 'running'" class="hint mono">{{ batchAge(b) }}</span>
+						<span class="flex1"></span>
+						<NButton
+							v-if="b.status === 'queued' || b.status === 'running'"
+							size="tiny"
+							type="error"
+							quaternary
+							@click.stop="cancelBatch(b)"
+						>
+							{{ t('expect.abort') }}
+						</NButton>
+					</div>
+				</NCard>
+			</template>
 		</template>
+
 
 		<NModal
 			:show="showDetail"
@@ -335,6 +400,19 @@ const itemOptions = computed(() =>
 				</div>
 			</template>
 		</NModal>
+
+		<!-- batch delete confirm: records + artifacts go with the batch -->
+		<NModal
+			:show="deleteTargetBatches !== null"
+			preset="dialog"
+			type="warning"
+			:title="t('build.deleteBatchesTitle')"
+			:content="t('build.deleteBatchesBody', { n: deleteTargetBatches?.length ?? 0 })"
+			:positive-text="t('expect.delete')"
+			:negative-text="t('common.cancel')"
+			@positive-click="confirmDeleteBatches"
+			@negative-click="deleteTargetBatches = null"
+		/>
 	</div>
 </template>
 
@@ -353,6 +431,13 @@ const itemOptions = computed(() =>
 	align-items: center;
 	justify-content: space-between;
 	gap: 12px;
+}
+.batch-toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	max-width: 860px;
+	margin-bottom: 8px;
 }
 .hint {
 	color: rgba(0, 0, 0, 0.45);
