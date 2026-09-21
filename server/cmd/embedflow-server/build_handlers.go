@@ -198,6 +198,7 @@ func (h *coordinator) handleCreateBatch(w http.ResponseWriter, r *http.Request) 
 	var req struct {
 		ProjectID int64   `json:"project_id"`
 		ItemIDs   []int64 `json:"item_ids"`
+		Name      string  `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ProjectID == 0 {
 		writeErr(w, http.StatusBadRequest, "project_id and item_ids required")
@@ -208,7 +209,15 @@ func (h *coordinator) handleCreateBatch(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	id, err := h.builds.CreateBatch(r.Context(), req.ProjectID, req.ItemIDs, user)
+	// Optional label, trimmed and capped -- a too-long name is truncated,
+	// never a trigger failure. Always cut by RUNES: a byte-slice cut lands
+	// mid-rune for CJK names (80 hanzi = 240 bytes) and the invalid UTF-8
+	// tail turns into U+FFFD mojibake in every JSON response.
+	name := strings.TrimSpace(req.Name)
+	if runes := []rune(name); len(runes) > 80 {
+		name = string(runes[:80])
+	}
+	id, err := h.builds.CreateBatch(r.Context(), req.ProjectID, req.ItemIDs, name, user)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -439,21 +448,43 @@ func (h *coordinator) handleDeleteBuildRecord(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleDeleteBuildRecords removes terminal records: explicit ids (the
+// records table's select-all + checkbox flow) or all of a project's
+// (legacy delete-all, all=true). Live records are skipped either way.
 func (h *coordinator) handleDeleteBuildRecordsAll(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ProjectID int64  `json:"project_id"`
-		Mode      string `json:"mode"` // record | artifacts
+		IDs       []int64 `json:"ids"`
+		All       bool    `json:"all"`
+		ProjectID int64   `json:"project_id"`
+		Mode      string  `json:"mode"` // record | artifacts
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ProjectID == 0 {
-		writeErr(w, http.StatusBadRequest, "project_id required")
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad body")
 		return
 	}
-	records, err := h.store.RecordsForProject(r.Context(), req.ProjectID)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+	if req.All {
+		if req.ProjectID == 0 {
+			writeErr(w, http.StatusBadRequest, "project_id required with all")
+			return
+		}
+		records, err := h.store.RecordsForProject(r.Context(), req.ProjectID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for _, rec := range records {
+			req.IDs = append(req.IDs, rec.ID)
+		}
+	}
+	if len(req.IDs) == 0 {
+		writeErr(w, http.StatusBadRequest, "ids required")
 		return
 	}
-	for _, rec := range records {
+	for _, id := range req.IDs {
+		rec, err := h.store.GetBuildRecord(r.Context(), id)
+		if err != nil {
+			continue // already gone / never existed: idempotent batch delete
+		}
 		if rec.Status == batch.RecPending || rec.Status == batch.RecBuilding {
 			continue // live work is not deletable
 		}

@@ -35,11 +35,13 @@ type BuildItem struct {
 	PrereqJSON string `json:"prereq_json"`
 }
 
-// Batch is one "build selected items" action (CONTEXT.md: 批次).
+// Batch is one "build selected items" action (CONTEXT.md: 批次). Name is an
+// optional user-facing label ("发布前测试") set at trigger time.
 type Batch struct {
 	ID        int64  `json:"id"`
 	ProjectID int64  `json:"project_id"`
 	Status    string `json:"status"` // queued | running | completed | failed | canceled
+	Name      string `json:"name"`
 	ItemsJSON string `json:"items_json"`
 	CreatedBy string `json:"created_by"`
 }
@@ -91,13 +93,28 @@ func scanBuildItem(sc interface{ Scan(dest ...any) error }) (BuildItem, error) {
 
 // --- batches ---
 
-// CreateBatch inserts a queued batch, returning its id.
+// CreateBatch inserts a queued batch, returning its id. A caller-supplied
+// b.ID > 0 is written verbatim: the batch kernel mints ids and the row must
+// carry the SAME id (two independent id spaces -- kernel counter vs
+// AUTOINCREMENT -- forked once history was deleted and the server restarted,
+// leaving a zombie "running" batch with no records; see build_orchestrator
+// CreateBatch). ID=0 keeps the autoincrement path for tests/seeds.
 func (s *Store) CreateBatch(ctx context.Context, b Batch) (int64, error) {
 	var id int64
 	err := s.enqueue(ctx, func() error {
+		if b.ID > 0 {
+			res, err := s.db.ExecContext(ctx,
+				"INSERT INTO batches (id, project_id, status, name, items_json, created_by) VALUES (?, ?, ?, ?, ?, ?)",
+				b.ID, b.ProjectID, b.Status, b.Name, b.ItemsJSON, b.CreatedBy)
+			if err != nil {
+				return err
+			}
+			id, err = res.LastInsertId()
+			return err
+		}
 		res, err := s.db.ExecContext(ctx,
-			"INSERT INTO batches (project_id, status, items_json, created_by) VALUES (?, ?, ?, ?)",
-			b.ProjectID, b.Status, b.ItemsJSON, b.CreatedBy)
+			"INSERT INTO batches (project_id, status, name, items_json, created_by) VALUES (?, ?, ?, ?, ?)",
+			b.ProjectID, b.Status, b.Name, b.ItemsJSON, b.CreatedBy)
 		if err != nil {
 			return err
 		}
@@ -111,8 +128,8 @@ func (s *Store) CreateBatch(ctx context.Context, b Batch) (int64, error) {
 func (s *Store) GetBatch(ctx context.Context, id int64) (Batch, error) {
 	var b Batch
 	err := s.db.QueryRowContext(ctx,
-		"SELECT id, project_id, status, items_json, created_by FROM batches WHERE id = ?", id).
-		Scan(&b.ID, &b.ProjectID, &b.Status, &b.ItemsJSON, &b.CreatedBy)
+		"SELECT id, project_id, status, name, items_json, created_by FROM batches WHERE id = ?", id).
+		Scan(&b.ID, &b.ProjectID, &b.Status, &b.Name, &b.ItemsJSON, &b.CreatedBy)
 	if err != nil {
 		return Batch{}, fmt.Errorf("store: get batch %d: %w", id, err)
 	}
@@ -122,7 +139,7 @@ func (s *Store) GetBatch(ctx context.Context, id int64) (Batch, error) {
 // ListBatchesByProject returns a project's batches, newest first.
 func (s *Store) ListBatchesByProject(ctx context.Context, projectID int64) ([]Batch, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, project_id, status, items_json, created_by FROM batches WHERE project_id = ? ORDER BY id DESC", projectID)
+		"SELECT id, project_id, status, name, items_json, created_by FROM batches WHERE project_id = ? ORDER BY id DESC", projectID)
 	if err != nil {
 		return nil, fmt.Errorf("store: list batches: %w", err)
 	}
@@ -130,7 +147,7 @@ func (s *Store) ListBatchesByProject(ctx context.Context, projectID int64) ([]Ba
 	var out []Batch
 	for rows.Next() {
 		var b Batch
-		if err := rows.Scan(&b.ID, &b.ProjectID, &b.Status, &b.ItemsJSON, &b.CreatedBy); err != nil {
+		if err := rows.Scan(&b.ID, &b.ProjectID, &b.Status, &b.Name, &b.ItemsJSON, &b.CreatedBy); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
@@ -150,7 +167,7 @@ func (s *Store) UpdateBatchStatus(ctx context.Context, id int64, status string) 
 // sweep's input (M2 mirrors CEO-7A: a restart cancels in-flight builds).
 func (s *Store) NonterminalBatches(ctx context.Context) ([]Batch, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, project_id, status, items_json, created_by FROM batches WHERE status IN ('queued','running')")
+		"SELECT id, project_id, status, name, items_json, created_by FROM batches WHERE status IN ('queued','running')")
 	if err != nil {
 		return nil, fmt.Errorf("store: nonterminal batches: %w", err)
 	}
@@ -158,7 +175,7 @@ func (s *Store) NonterminalBatches(ctx context.Context) ([]Batch, error) {
 	var out []Batch
 	for rows.Next() {
 		var b Batch
-		if err := rows.Scan(&b.ID, &b.ProjectID, &b.Status, &b.ItemsJSON, &b.CreatedBy); err != nil {
+		if err := rows.Scan(&b.ID, &b.ProjectID, &b.Status, &b.Name, &b.ItemsJSON, &b.CreatedBy); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
@@ -183,10 +200,22 @@ func (s *Store) MaxBuildRecordID(ctx context.Context) (int64, error) {
 
 // --- build records ---
 
-// CreateBuildRecord inserts a pending record, returning its id.
+// CreateBuildRecord inserts a pending record, returning its id. A
+// caller-supplied r.ID > 0 is written verbatim (same kernel-id parity rule
+// as CreateBatch); ID=0 keeps the autoincrement path.
 func (s *Store) CreateBuildRecord(ctx context.Context, r BuildRecord) (int64, error) {
 	var id int64
 	err := s.enqueue(ctx, func() error {
+		if r.ID > 0 {
+			res, err := s.db.ExecContext(ctx,
+				"INSERT INTO build_records (id, batch_id, item_id, project_id, status, executor) VALUES (?, ?, ?, ?, ?, ?)",
+				r.ID, r.BatchID, r.ItemID, r.ProjectID, r.Status, r.Executor)
+			if err != nil {
+				return err
+			}
+			id, err = res.LastInsertId()
+			return err
+		}
 		res, err := s.db.ExecContext(ctx,
 			"INSERT INTO build_records (batch_id, item_id, project_id, status, executor) VALUES (?, ?, ?, ?, ?)",
 			r.BatchID, r.ItemID, r.ProjectID, r.Status, r.Executor)

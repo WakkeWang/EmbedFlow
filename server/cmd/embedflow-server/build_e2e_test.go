@@ -359,6 +359,157 @@ func TestBuildE2E_BatchValidation(t *testing.T) {
 	}
 }
 
+// The batch name is an optional trigger-time label ("发布前测试"): carried
+// through to the row verbatim when set, empty when not, truncated (never a
+// 400) when over the 80-rune cap.
+func TestBuildE2E_BatchName(t *testing.T) {
+	s := newTestServer(t)
+	ctx := context.Background()
+	adminTok := s.hub.tokens.issueForTesting("admin")
+
+	presp := apiCall(t, s, adminTok, "POST", "/api/projects", map[string]string{"name": "P-name"})
+	proj := decodeBody[struct {
+		ID int64 `json:"id"`
+	}](t, readRespBody(t, presp))
+	fixture := seedGitFixture(t)
+	iresp := apiCall(t, s, adminTok, "POST", "/api/projects/"+itoa(proj.ID)+"/build-items", map[string]any{
+		"name": "bootfw", "source_type": "local", "local_path": fixture,
+		"command": buildCmdForTest(), "artifacts": []string{"bootfw*.bin"},
+	})
+	item := decodeBody[struct {
+		ID int64 `json:"id"`
+	}](t, readRespBody(t, iresp))
+
+	// Named batch: the label round-trips.
+	cresp := apiCall(t, s, adminTok, "POST", "/api/batches", map[string]any{
+		"project_id": proj.ID, "item_ids": []int64{item.ID}, "name": "发布前测试",
+	})
+	if cresp.StatusCode != 200 {
+		t.Fatalf("named create = %d", cresp.StatusCode)
+	}
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	_ = json.NewDecoder(cresp.Body).Decode(&created)
+	b, err := s.st.GetBatch(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get named batch: %v", err)
+	}
+	if b.Name != "发布前测试" {
+		t.Fatalf("batch name = %q", b.Name)
+	}
+
+	// Unnamed batch: empty string, not "undefined"/null artifacts.
+	cresp = apiCall(t, s, adminTok, "POST", "/api/batches", map[string]any{
+		"project_id": proj.ID, "item_ids": []int64{item.ID},
+	})
+	if cresp.StatusCode != 200 {
+		t.Fatalf("unnamed create = %d", cresp.StatusCode)
+	}
+	_ = json.NewDecoder(cresp.Body).Decode(&created)
+	b, err = s.st.GetBatch(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get unnamed batch: %v", err)
+	}
+	if b.Name != "" {
+		t.Fatalf("unnamed batch name = %q, want empty", b.Name)
+	}
+
+	// An 200-rune name is truncated to 80, still 200.
+	long := strings.Repeat("名", 200)
+	cresp = apiCall(t, s, adminTok, "POST", "/api/batches", map[string]any{
+		"project_id": proj.ID, "item_ids": []int64{item.ID}, "name": long,
+	})
+	if cresp.StatusCode != 200 {
+		t.Fatalf("long-name create = %d", cresp.StatusCode)
+	}
+	_ = json.NewDecoder(cresp.Body).Decode(&created)
+	b, err = s.st.GetBatch(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get long-named batch: %v", err)
+	}
+	if got := []rune(b.Name); len(got) != 80 {
+		t.Fatalf("long name len = %d, want 80", len(got))
+	}
+
+	// Whitespace-only name stores as empty.
+	cresp = apiCall(t, s, adminTok, "POST", "/api/batches", map[string]any{
+		"project_id": proj.ID, "item_ids": []int64{item.ID}, "name": "   ",
+	})
+	_ = json.NewDecoder(cresp.Body).Decode(&created)
+	b, _ = s.st.GetBatch(ctx, created.ID)
+	if b.Name != "" {
+		t.Fatalf("whitespace name = %q, want empty", b.Name)
+	}
+}
+
+// The kernel's event contract: events carry their own batch id, and the
+// orchestrator must apply them under THAT id. Finishing (or canceling) a
+// record frees a run slot; pumpLocked may admit ANOTHER queued batch and
+// return its Admitted/RecordStart events. Applying those under the wrong
+// batch id ran the other batch's build under this batch's id, whose
+// kernel.Active check then failed -- the other batch's record stuck
+// "building" forever, its card "running", one kernel slot leaked.
+func TestBuildE2E_QueuedBatchEventsCarryOwnBatchID(t *testing.T) {
+	s := newTestServer(t)
+	ctx := context.Background()
+	adminTok := s.hub.tokens.issueForTesting("admin")
+
+	presp := apiCall(t, s, adminTok, "POST", "/api/projects", map[string]string{"name": "P-pump"})
+	proj := decodeBody[struct {
+		ID int64 `json:"id"`
+	}](t, readRespBody(t, presp))
+	fixture := seedGitFixture(t)
+	iresp := apiCall(t, s, adminTok, "POST", "/api/projects/"+itoa(proj.ID)+"/build-items", map[string]any{
+		"name": "bootfw", "source_type": "local", "local_path": fixture,
+		"command": buildCmdForTest(), "artifacts": []string{"bootfw*.bin"},
+	})
+	item := decodeBody[struct {
+		ID int64 `json:"id"`
+	}](t, readRespBody(t, iresp))
+
+	// Cap parallel batches at 1 so the second batch queues behind the first.
+	if resp := apiCall(t, s, adminTok, "PUT", "/api/settings", map[string]string{"max_parallel_batches": "1"}); resp.StatusCode != 204 {
+		t.Fatalf("PUT settings = %d", resp.StatusCode)
+	}
+
+	b1, err := s.hub.builds.CreateBatch(ctx, proj.ID, []int64{item.ID}, "", "admin")
+	if err != nil {
+		t.Fatalf("batch 1: %v", err)
+	}
+	b2, err := s.hub.builds.CreateBatch(ctx, proj.ID, []int64{item.ID}, "", "admin")
+	if err != nil {
+		t.Fatalf("batch 2: %v", err)
+	}
+
+	// Both batches must reach a terminal state: batch 2 is admitted when
+	// batch 1 finishes, and its RecordStart must run under batch 2's id.
+	terminal := func(id int64) bool {
+		b, _ := s.st.GetBatch(ctx, id)
+		return b.Status == "completed" || b.Status == "failed" || b.Status == "canceled"
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		if terminal(b1) && terminal(b2) {
+			break
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	if !terminal(b1) {
+		t.Fatalf("batch 1 stuck: %s", func() string { bb, _ := s.st.GetBatch(ctx, b1); return bb.Status }())
+	}
+	if !terminal(b2) {
+		t.Fatalf("batch 2 stuck (queued batch never ran under its own batch id): %s",
+			func() string { bb, _ := s.st.GetBatch(ctx, b2); return bb.Status }())
+	}
+	recs, _ := s.st.RecordsForBatch(ctx, b2)
+	for _, r := range recs {
+		if r.Status == "building" || r.Status == "pending" {
+			t.Fatalf("batch 2 record %d stuck in %s", r.ID, r.Status)
+		}
+	}
+}
+
 // The 0.80 deployment bug: after a restart with an all-terminal history,
 // the kernel's record counter restarted at zero and the next batch's
 // CreateBuildRecord collided with historical ids (primary-key error, the
@@ -409,7 +560,7 @@ func TestBuildE2E_KernelCountersSurviveRestart(t *testing.T) {
 
 	// A new batch must NOT reuse record id 1: its records start above the
 	// historical max.
-	batchID, err := hub2.builds.CreateBatch(context.Background(), proj.ID, []int64{item.ID}, "admin")
+	batchID, err := hub2.builds.CreateBatch(context.Background(), proj.ID, []int64{item.ID}, "", "admin")
 	if err != nil {
 		t.Fatalf("create batch after restart: %v", err)
 	}
@@ -423,6 +574,106 @@ func TestBuildE2E_KernelCountersSurviveRestart(t *testing.T) {
 	for _, r := range records {
 		if r.ID <= 1 {
 			t.Fatalf("record id %d collides with the historical row", r.ID)
+		}
+	}
+}
+
+// The 0.80 production bug (second fork): after running a batch and deleting
+// the whole batch history, a server restart left sqlite_sequence high
+// (AUTOINCREMENT never reuses ids) while the kernel's counters seeded from
+// MAX(id)=0. The next batch was kernel-id 1 but sqlite row 14;
+// PlanRecords(14) found nothing, no records were ever persisted, and the
+// batch sat "running" forever with zero build records. The fix persists rows
+// under the kernel-minted ids, so this test asserts id parity structurally:
+// a fresh kernel (never seeded, the restart condition) must still produce a
+// batch whose records exist and complete.
+func TestBuildE2E_BatchIDsSurviveHistoryDelete(t *testing.T) {
+	s := newTestServer(t)
+	ctx := context.Background()
+	adminTok := s.hub.tokens.issueForTesting("admin")
+
+	presp := apiCall(t, s, adminTok, "POST", "/api/projects", map[string]string{"name": "P-fork"})
+	proj := decodeBody[struct {
+		ID int64 `json:"id"`
+	}](t, readRespBody(t, presp))
+	fixture := seedGitFixture(t)
+	iresp := apiCall(t, s, adminTok, "POST", "/api/projects/"+itoa(proj.ID)+"/build-items", map[string]any{
+		"name": "bootfw", "source_type": "local", "local_path": fixture,
+		"command": buildCmdForTest(), "artifacts": []string{"bootfw*.bin"},
+	})
+	item := decodeBody[struct {
+		ID int64 `json:"id"`
+	}](t, readRespBody(t, iresp))
+
+	// Phase 1: run one batch to completion so sqlite_sequence is high.
+	batchID, err := s.hub.builds.CreateBatch(ctx, proj.ID, []int64{item.ID}, "", "admin")
+	if err != nil {
+		t.Fatalf("first batch: %v", err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		recs, _ := s.st.RecordsForBatch(ctx, batchID)
+		if len(recs) == 1 && (recs[0].Status == "succeeded" || recs[0].Status == "failed") {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	b1, _ := s.st.GetBatch(ctx, batchID)
+	if b1.Status != "completed" && b1.Status != "failed" {
+		t.Fatalf("first batch never finished: %s", b1.Status)
+	}
+
+	// Delete the whole batch history (the 0.80 operator action: artifacts
+	// rows go first -- FK artifacts.build_record_id -- then records, batch).
+	recs1, _ := s.st.RecordsForBatch(ctx, batchID)
+	for _, r := range recs1 {
+		if err := s.st.DeleteArtifactsForRecord(ctx, r.ID); err != nil {
+			t.Fatalf("delete history artifacts: %v", err)
+		}
+		if err := s.st.DeleteBuildRecord(ctx, r.ID); err != nil {
+			t.Fatalf("delete history record: %v", err)
+		}
+	}
+	if err := s.st.DeleteBatch(ctx, batchID); err != nil {
+		t.Fatalf("delete history batch: %v", err)
+	}
+	if m, _ := s.st.MaxBatchID(ctx); m != 0 {
+		t.Fatalf("history not empty: max batch id %d", m)
+	}
+
+	// Phase 2: a fresh kernel + sweepStartup WITHOUT history to seed from --
+	// exactly the post-restart state that forked the id spaces.
+	hub2 := newCoordinator(s.kernel, s.st, s.hub.dataDir)
+	hub2.builds = newBuildOrchestrator(batch.New(batch.Options{}), s.st, hub2)
+	if err := hub2.builds.sweepStartup(); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	// The new batch must get a row under the kernel's id, with records that
+	// actually persist and run -- not a zombie "running" with zero records.
+	batch2, err := hub2.builds.CreateBatch(ctx, proj.ID, []int64{item.ID}, "", "admin")
+	if err != nil {
+		t.Fatalf("batch after history delete: %v", err)
+	}
+	recs, err := s.st.RecordsForBatch(ctx, batch2)
+	if err != nil || len(recs) == 0 {
+		t.Fatalf("records for new batch: %v, %d", err, len(recs))
+	}
+	b2, _ := s.st.GetBatch(ctx, batch2)
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		b2, _ = s.st.GetBatch(ctx, batch2)
+		if b2.Status == "completed" || b2.Status == "failed" {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if b2.Status != "completed" && b2.Status != "failed" {
+		t.Fatalf("second batch stuck: %s", b2.Status)
+	}
+	for _, r := range recs {
+		if r.ID != recs[0].ID && r.BatchID != batch2 {
+			t.Fatalf("record %d not under batch %d", r.ID, batch2)
 		}
 	}
 }

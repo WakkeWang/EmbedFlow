@@ -125,7 +125,8 @@ func (b *buildOrchestrator) sweepStartup() error {
 
 // CreateBatch validates the selection, expands the plan, persists the batch
 // plus pending records, and enqueues it in the kernel. Returns the batch id.
-func (b *buildOrchestrator) CreateBatch(ctx context.Context, projectID int64, selected []int64, user string) (int64, error) {
+// name is an optional user-facing label (batches table "name" column).
+func (b *buildOrchestrator) CreateBatch(ctx context.Context, projectID int64, selected []int64, name, user string) (int64, error) {
 	if len(selected) == 0 {
 		return 0, fmt.Errorf("no items selected")
 	}
@@ -144,21 +145,16 @@ func (b *buildOrchestrator) CreateBatch(ctx context.Context, projectID int64, se
 		return 0, err
 	}
 
-	batchID, err := b.store.CreateBatch(ctx, store.Batch{
-		ProjectID: projectID,
-		Status:    batch.BatchQueued,
-		ItemsJSON: encodeJSONInts(selected),
-		CreatedBy: user,
-	})
-	if err != nil {
-		return 0, err
-	}
-
-	// Plan into the kernel: the kernel assigns record ids and may already
-	// admit the batch. Persist every planned record BEFORE applying events
-	// (RecordStart handlers read the row from the store).
+	// Plan into the kernel FIRST: the kernel mints the batch id and record
+	// ids, and the persisted rows must carry exactly those ids. Two
+	// independent id spaces (kernel counter vs AUTOINCREMENT) forked once
+	// history was deleted and the server restarted: kernel batch 1 landed as
+	// sqlite row 14, PlanRecords(14) found nothing, no records were ever
+	// persisted, and the batch sat "running" forever. Persisting the
+	// kernel-minted ids makes the fork structurally impossible.
 	plan := batch.Plan{Selected: toBatchIDs(selected), Items: toBatchItems(universe)}
-	_, events := b.kernel.Enqueue(plan, toBatchIDs(selected))
+	kBatchID, events := b.kernel.Enqueue(plan, toBatchIDs(selected))
+	batchID := int64(kBatchID)
 
 	b.mu.Lock()
 	for _, it := range universe {
@@ -166,14 +162,41 @@ func (b *buildOrchestrator) CreateBatch(ctx context.Context, projectID int64, se
 	}
 	b.mu.Unlock()
 
-	for _, rec := range b.kernel.PlanRecords(batch.BatchID(batchID)) {
+	if _, err := b.store.CreateBatch(ctx, store.Batch{
+		ID:        batchID,
+		ProjectID: projectID,
+		Status:    batch.BatchQueued,
+		Name:      name,
+		ItemsJSON: encodeJSONInts(selected),
+		CreatedBy: user,
+	}); err != nil {
+		// No rows exist, so the kernel batch is unreferenced: cancel it and
+		// DROP its events (applying them would persist rows for a batch the
+		// store does not know). Without this a failed insert leaks a kernel
+		// running slot forever.
+		for _, ev := range b.kernel.Cancel(kBatchID) {
+			_ = ev
+		}
+		return 0, err
+	}
+
+	// Persist every planned record BEFORE applying events (RecordStart
+	// handlers read the row from the store).
+	for _, rec := range b.kernel.PlanRecords(kBatchID) {
 		if _, err := b.store.CreateBuildRecord(ctx, store.BuildRecord{
+			ID:        int64(rec.RecordID),
 			BatchID:   batchID,
 			ItemID:    int64(rec.ItemID),
 			ProjectID: projectID,
 			Status:    batch.RecPending,
 			Executor:  user,
 		}); err != nil {
+			// Same recovery as the batch-row failure above: without it the
+			// kernel batch (admitted, holding a run slot) survives with a
+			// half-persisted record set until the next restart sweep.
+			for _, ev := range b.kernel.Cancel(kBatchID) {
+				_ = ev
+			}
 			return 0, err
 		}
 	}
@@ -318,7 +341,13 @@ func (b *buildOrchestrator) runRecord(batchID, projectID, recordID, itemID int64
 		outcome = batch.OutcomeFailed
 	}
 	for _, ev := range b.kernel.NotifyRecordDone(batch.BatchID(batchID), batch.RecordID(recordID), outcome) {
-		b.applyEvent(ev, batchID, projectID, user)
+		// The kernel's contract: events carry their own batch id. Finishing
+		// a record can pump the queue and admit OTHER queued batches -- those
+		// Admitted/RecordStart events must be applied under their own ids,
+		// not this batch's (the old code ran another batch's build under
+		// this batch id, which then failed the kernel.Active check and left
+		// the other batch's record stuck "building" forever).
+		b.applyEvent(ev, int64(ev.BatchID), 0, "")
 	}
 }
 
@@ -369,7 +398,9 @@ func (b *buildOrchestrator) CancelBatch(batchID int64) error {
 	b.mu.Unlock()
 
 	for _, ev := range b.kernel.Cancel(batch.BatchID(batchID)) {
-		b.applyEvent(ev, batchID, 0, "")
+		// Canceling frees a slot too: pumped queued-batch events ride their
+		// own batch ids (same contract as NotifyRecordDone above).
+		b.applyEvent(ev, int64(ev.BatchID), 0, "")
 	}
 	return nil
 }

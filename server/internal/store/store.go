@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS batches (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
 	project_id INTEGER NOT NULL REFERENCES projects(id),
 	status     TEXT NOT NULL CHECK (status IN ('queued','running','completed','failed','canceled')),
+	name       TEXT NOT NULL DEFAULT '',
 	items_json TEXT NOT NULL DEFAULT '[]',
 	created_by TEXT NOT NULL,
 	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -224,6 +225,15 @@ CREATE TABLE IF NOT EXISTS exec_records (
 	}
 	// M4-era column additions ride the same tolerant-ALTER pattern as the
 	// device SSH columns (duplicate column = already at the target state).
+	// batches.name: user-facing batch label ("发布前测试"), optional.
+	batchAlters := []string{
+		"ALTER TABLE batches ADD COLUMN name TEXT NOT NULL DEFAULT ''",
+	}
+	for _, stmt := range batchAlters {
+		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("store: migrate batches column: %w", err)
+		}
+	}
 	recordAlters := []string{
 		"ALTER TABLE build_records ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
 	}
