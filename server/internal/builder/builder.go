@@ -411,7 +411,7 @@ func (e *Executor) runCommand(recordID int64, item store.BuildItem, buildDir str
 		ctx, timeoutCancel = context.WithTimeout(ctx, time.Duration(item.TimeoutSec)*time.Second)
 		defer timeoutCancel()
 	}
-	cmd := exec.CommandContext(ctx, shellName(), shellArg(item.Command))
+	cmd := runShellContext(ctx, item.Command)
 	cmd.Dir = buildDir
 	// Process-group kill so shell scripts cannot orphan children (the flash
 	// flow's bb.sh pattern spawns toolchains); Windows falls back to
@@ -453,7 +453,7 @@ func (e *Executor) runCommand(recordID int64, item store.BuildItem, buildDir str
 // runVersionCmd executes item.VersionCmd and returns its full output
 // (requirement 2.1: 完整输出全部记录为版本信息).
 func (e *Executor) runVersionCmd(recordID int64, item store.BuildItem, buildDir string, log *logWriter) (string, string) {
-	cmd := exec.Command(shellName(), shellArg(item.VersionCmd))
+	cmd := runShell(item.VersionCmd)
 	cmd.Dir = buildDir
 	out, err := cmd.CombinedOutput()
 	scannerLines(out, func(l string) { log.line(PhaseVersion, l) })
