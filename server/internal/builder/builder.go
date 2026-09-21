@@ -100,6 +100,7 @@ type Result struct {
 	OK          bool
 	Detail      string // human-readable end reason
 	CommitSHA   string
+	Branch      string
 	VersionInfo string
 	ExitCode    *int
 	// Canceled is true when the run ended because of a cancel request: the
@@ -217,12 +218,16 @@ func (e *Executor) run(recordID int64, item store.BuildItem, checksumSetting str
 	cancelled := func() bool {
 		return e.Canceled != nil && e.Canceled(recordID)
 	}
+	// The item's branch rides every result so build history shows what the
+	// build ran on (the record's Branch column).
+	branch := item.GitBranch
 
 	// 1. Source preparation (dirty check runs on the source inside).
 	tmpDir := filepath.Join(e.TmpRoot, fmt.Sprintf("build-%d", recordID))
 	buildDir, res := e.prepareSource(recordID, item, tmpDir, log)
 	if buildDir == "" {
 		e.lastFailed = true
+		res.Branch = branch
 		return *res
 	}
 	defer e.cleanupTmp(recordID, tmpDir, log)
@@ -230,12 +235,12 @@ func (e *Executor) run(recordID int64, item store.BuildItem, checksumSetting str
 	// 3. Commit snapshot.
 	sha, err := gitHead(buildDir)
 	if err != nil {
-		return Result{Detail: "read commit: " + err.Error()}
+		return Result{Detail: "read commit: " + err.Error(), Branch: branch}
 	}
 	log.line(PhaseClone, "source snapshot: "+sha)
 
 	if cancelled() {
-		return Result{Detail: "canceled", Canceled: true}
+		return Result{Detail: "canceled", Canceled: true, Branch: branch}
 	}
 
 	// 4. Build command.
@@ -244,14 +249,14 @@ func (e *Executor) run(recordID int64, item store.BuildItem, checksumSetting str
 		if cancelled() {
 			// The cancel killed the command: report cancellation, not a
 			// failure (the exit code is the kill's, not the build's).
-			return Result{Detail: "canceled", Canceled: true, CommitSHA: sha, ExitCode: &exitCode}
+			return Result{Detail: "canceled", Canceled: true, CommitSHA: sha, ExitCode: &exitCode, Branch: branch}
 		}
 		e.lastFailed = true
-		return Result{Detail: detail, CommitSHA: sha, ExitCode: &exitCode}
+		return Result{Detail: detail, CommitSHA: sha, ExitCode: &exitCode, Branch: branch}
 	}
 
 	if cancelled() {
-		return Result{Detail: "canceled", Canceled: true, CommitSHA: sha, ExitCode: &exitCode}
+		return Result{Detail: "canceled", Canceled: true, CommitSHA: sha, ExitCode: &exitCode, Branch: branch}
 	}
 
 	// 5. Version extraction.
@@ -262,7 +267,7 @@ func (e *Executor) run(recordID int64, item store.BuildItem, checksumSetting str
 			// A version-extraction failure fails the record: the version
 			// info is part of the record contract (requirement 2.1).
 			e.lastFailed = true
-			return Result{Detail: "version extraction: " + verr, CommitSHA: sha, ExitCode: &exitCode}
+			return Result{Detail: "version extraction: " + verr, CommitSHA: sha, ExitCode: &exitCode, Branch: branch}
 		}
 		versionInfo = vi
 	}
@@ -271,14 +276,14 @@ func (e *Executor) run(recordID int64, item store.BuildItem, checksumSetting str
 	arts, aerr := e.archiveArtifacts(recordID, item, buildDir, checksumSetting, log)
 	if aerr != "" {
 		e.lastFailed = true
-		return Result{Detail: "artifacts: " + aerr, CommitSHA: sha, VersionInfo: versionInfo, ExitCode: &exitCode}
+		return Result{Detail: "artifacts: " + aerr, CommitSHA: sha, VersionInfo: versionInfo, ExitCode: &exitCode, Branch: branch}
 	}
 	if len(arts) == 0 {
 		e.lastFailed = true
-		return Result{Detail: "no artifacts matched the declared globs", CommitSHA: sha, VersionInfo: versionInfo, ExitCode: &exitCode}
+		return Result{Detail: "no artifacts matched the declared globs", CommitSHA: sha, VersionInfo: versionInfo, ExitCode: &exitCode, Branch: branch}
 	}
 
-	return Result{OK: true, Detail: fmt.Sprintf("%d artifacts archived", len(arts)), CommitSHA: sha, VersionInfo: versionInfo, ExitCode: &exitCode, Artifacts: arts}
+	return Result{OK: true, Detail: fmt.Sprintf("%d artifacts archived", len(arts)), CommitSHA: sha, Branch: branch, VersionInfo: versionInfo, ExitCode: &exitCode, Artifacts: arts}
 }
 
 // prepareSource gets a clean git worktree into tmpDir and returns the build

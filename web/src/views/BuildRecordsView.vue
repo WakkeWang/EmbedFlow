@@ -213,6 +213,8 @@ const columns = computed<DataTableColumns<BuildRecordRecord>>(() => [
 		width: 130,
 		render: (r) => h(NTag, { size: 'small', type: statusType(r.status) }, { default: () => t('build.rec_' + r.status) }),
 	},
+	{ title: t('build.branch'), key: 'branch', width: 140, render: (r) =>
+		h('span', { class: 'mono', style: 'font-size:12px' }, r.branch || '-') },
 	{ title: t('build.commitShort'), key: 'commit_sha', width: 120, render: (r) =>
 		h('span', { class: 'mono', style: 'font-size:12px' }, r.commit_sha ? r.commit_sha.slice(0, 8) : '-') },
 	{ title: t('history.start'), key: 'started_at', render: (r) => fmtTime(r.started_at) },

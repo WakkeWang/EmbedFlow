@@ -285,6 +285,7 @@ func (b *buildOrchestrator) runRecord(batchID, projectID, recordID, itemID int64
 		return
 	}
 	rec.CommitSHA = res.CommitSHA
+	rec.Branch = res.Branch
 	rec.VersionInfo = res.VersionInfo
 	rec.EndedAt = time.Now().Format(time.RFC3339)
 	if res.ExitCode != nil {

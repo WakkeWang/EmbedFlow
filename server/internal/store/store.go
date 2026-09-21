@@ -222,6 +222,16 @@ CREATE TABLE IF NOT EXISTS exec_records (
 	if err != nil {
 		return fmt.Errorf("store: migrate: %w", err)
 	}
+	// M4-era column additions ride the same tolerant-ALTER pattern as the
+	// device SSH columns (duplicate column = already at the target state).
+	recordAlters := []string{
+		"ALTER TABLE build_records ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
+	}
+	for _, stmt := range recordAlters {
+		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("store: migrate build_records column: %w", err)
+		}
+	}
 	// M3 (requirement 3.2): SSH credentials, encrypted at rest (requirement
 	// 6.2, secretbox AES-256-GCM). ALTER-based so existing databases upgrade;
 	// a column that already exists IS the target state, so "duplicate column

@@ -181,6 +181,7 @@ export interface BuildRecordRecord {
 	project_id: number
 	status: 'pending' | 'building' | 'succeeded' | 'failed' | 'canceled' | 'skipped'
 	commit_sha: string
+	branch?: string
 	version_info: string
 	exit_code?: number | null
 	executor: string

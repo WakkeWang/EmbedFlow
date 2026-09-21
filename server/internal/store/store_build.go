@@ -52,6 +52,7 @@ type BuildRecord struct {
 	ProjectID   int64   `json:"project_id"`
 	Status      string  `json:"status"`
 	CommitSHA   string  `json:"commit_sha"`
+	Branch      string  `json:"branch"`
 	VersionInfo string  `json:"version_info"`
 	ExitCode    *int    `json:"exit_code"`
 	Executor    string  `json:"executor"`
@@ -208,6 +209,7 @@ func (s *Store) GetBuildRecord(ctx context.Context, id int64) (BuildRecord, erro
 	if err != nil {
 		return BuildRecord{}, fmt.Errorf("store: get build record %d: %w", id, err)
 	}
+	r.Branch = s.recordBranch(ctx, id)
 	if exit.Valid {
 		v := int(exit.Int64)
 		r.ExitCode = &v
@@ -221,7 +223,12 @@ func (s *Store) RecordsForBatch(ctx context.Context, batchID int64) ([]BuildReco
 	if err != nil {
 		return nil, fmt.Errorf("store: records for batch: %w", err)
 	}
-	return scanRecords(rows)
+	out, err := scanRecords(rows)
+	if err != nil {
+		return nil, err
+	}
+	s.fillBranches(out)
+	return out, nil
 }
 
 // RecordsForProject lists a project's records newest first (build history
@@ -231,7 +238,12 @@ func (s *Store) RecordsForProject(ctx context.Context, projectID int64) ([]Build
 	if err != nil {
 		return nil, fmt.Errorf("store: records for project: %w", err)
 	}
-	return scanRecords(rows)
+	out, err := scanRecords(rows)
+	if err != nil {
+		return nil, err
+	}
+	s.fillBranches(out)
+	return out, nil
 }
 
 // NonterminalRecords lists records still pending or building -- the startup
@@ -265,8 +277,31 @@ func scanRecords(rows *sql.Rows) ([]BuildRecord, error) {
 	return out, rows.Err()
 }
 
+// fillBranches reads the branch column (added by the M4-era migration) for
+// a batch of records. Best-effort: a database without the column leaves
+// Branch empty; callers keep the base fields.
+func (s *Store) fillBranches(records []BuildRecord) {
+	for i := range records {
+		var branch string
+		if err := s.db.QueryRowContext(context.Background(),
+			"SELECT branch FROM build_records WHERE id = ?", records[i].ID).Scan(&branch); err == nil {
+			records[i].Branch = branch
+		}
+	}
+}
+
+// recordBranch reads the branch column added by the M4-era migration;
+// databases that predate the column (or the migration ordering window)
+// return "".
+func (s *Store) recordBranch(ctx context.Context, id int64) string {
+	var branch string
+	_ = s.db.QueryRowContext(ctx, "SELECT branch FROM build_records WHERE id = ?", id).Scan(&branch)
+	return branch
+}
+
 // UpdateBuildRecord persists a record's mutable fields. Timestamps ride as
-// strings (RFC3339) -- the executor owns clock reads.
+// strings (RFC3339) -- the executor owns clock reads. Branch writes are
+// best-effort: databases missing the column keep everything else.
 func (s *Store) UpdateBuildRecord(ctx context.Context, r BuildRecord) error {
 	return s.enqueue(ctx, func() error {
 		var exit any
@@ -276,7 +311,11 @@ func (s *Store) UpdateBuildRecord(ctx context.Context, r BuildRecord) error {
 		_, err := s.db.ExecContext(ctx,
 			"UPDATE build_records SET status = ?, commit_sha = ?, version_info = ?, exit_code = ?, executor = ?, started_at = ?, ended_at = ? WHERE id = ?",
 			r.Status, r.CommitSHA, r.VersionInfo, exit, r.Executor, r.StartedAt, r.EndedAt, r.ID)
-		return err
+		if err != nil {
+			return err
+		}
+		_, _ = s.db.ExecContext(ctx, "UPDATE build_records SET branch = ? WHERE id = ?", r.Branch, r.ID)
+		return nil
 	})
 }
 
